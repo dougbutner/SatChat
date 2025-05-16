@@ -1,27 +1,31 @@
 import TelegramBot from 'node-telegram-bot-api';
-import firebase from 'firebase/app';
-import 'firebase/firestore';
+import dotenv from 'dotenv';
 import { getBitcoinFact } from './utils/facts.js';
+import {
+  initializeDatabase,
+  getUser,
+  createUser,
+  updateUserBalance,
+  updateUserWallet,
+  resetUserBalance,
+  logReward,
+  saveDailyStats,
+  addPinnedMessage,
+  getExpiredPins,
+  removePin,
+  logDonation,
+  updateDonationStatus,
+  updatePinPaymentStatus
+} from './database.js';
 
-// Firebase initialization
-const firebaseConfig = {
-  // This would come from environment variables in a real setup
-  apiKey: "FIREBASE_API_KEY",
-  authDomain: "satchat-app.firebaseapp.com",
-  projectId: "satchat-app",
-  storageBucket: "satchat-app.appspot.com",
-  messagingSenderId: "MESSAGING_SENDER_ID",
-  appId: "APP_ID"
-};
+// Load environment variables
+dotenv.config();
 
-// Initialize Firebase
-if (!firebase.apps.length) {
-  firebase.initializeApp(firebaseConfig);
-}
-const db = firebase.firestore();
+// Initialize database
+initializeDatabase();
 
 // Initialize the bot with your token
-const token = 'YOUR_TELEGRAM_BOT_TOKEN';
+const token = process.env.TELEGRAM_BOT_TOKEN || 'YOUR_TELEGRAM_BOT_TOKEN';
 const bot = new TelegramBot(token, { polling: true });
 
 // Default configuration values
@@ -44,13 +48,8 @@ let dailyRewards = {
 function resetDailyStats() {
   const today = new Date().toISOString().split('T')[0];
   if (dailyRewards.date !== today) {
-    // Archive previous day's stats to Firestore
-    db.collection('dailyStats').add({
-      date: dailyRewards.date,
-      totalDistributed: dailyRewards.totalDistributed,
-      messageCount: dailyRewards.messageCount,
-      activeUsers: Array.from(dailyRewards.activeUsers),
-    });
+    // Archive previous day's stats to database
+    saveDailyStats(dailyRewards);
     
     // Reset for new day
     dailyRewards = {
@@ -83,29 +82,18 @@ bot.on('message', async (msg) => {
     }
     
     // Check if user exists, create if not
-    const userRef = db.collection('users').doc(msg.from.id.toString());
-    const userDoc = await userRef.get();
-    
-    if (!userDoc.exists) {
-      await userRef.set({
+    let user = await getUser(msg.from.id);
+    if (!user) {
+      await createUser({
         telegramId: msg.from.id,
         username: msg.from.username || '',
         firstName: msg.from.first_name || '',
-        lastName: msg.from.last_name || '',
-        balance: 0,
-        totalEarned: 0,
-        messageCount: 0,
-        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+        lastName: msg.from.last_name || ''
       });
     }
     
     // Award Satoshis for the message
-    await userRef.update({
-      balance: firebase.firestore.FieldValue.increment(config.rewardPerMessage),
-      totalEarned: firebase.firestore.FieldValue.increment(config.rewardPerMessage),
-      messageCount: firebase.firestore.FieldValue.increment(1),
-      lastActive: firebase.firestore.FieldValue.serverTimestamp(),
-    });
+    await updateUserBalance(msg.from.id, config.rewardPerMessage);
     
     // Update daily stats
     dailyRewards.totalDistributed += config.rewardPerMessage;
@@ -113,14 +101,7 @@ bot.on('message', async (msg) => {
     dailyRewards.activeUsers.add(msg.from.id);
     
     // Log the reward in history
-    await db.collection('rewardHistory').add({
-      userId: msg.from.id,
-      amount: config.rewardPerMessage,
-      messageId: msg.message_id,
-      chatId: msg.chat.id,
-      timestamp: firebase.firestore.FieldValue.serverTimestamp(),
-      messageText: msg.text || '[media]',
-    });
+    await logReward(msg.from.id, config.rewardPerMessage, msg.message_id, msg.chat.id, msg.text || '[media]');
     
     // Get Bitcoin fact
     const fact = getBitcoinFact();
@@ -147,17 +128,14 @@ bot.onText(/\/linkwallet (.+)/, async (msg, match) => {
     if (!walletAddress.startsWith('ln')) {
       await bot.sendMessage(
         msg.chat.id,
-        '❌ Invalid Lightning wallet address. Please provide an address starting with "ln".',
+        '❌ Invalid Lightning wallet address. Please provide an address starting with "ln".', 
         { reply_to_message_id: msg.message_id }
       );
       return;
     }
     
     // Update user's wallet address
-    await db.collection('users').doc(msg.from.id.toString()).update({
-      walletAddress: walletAddress,
-      walletLinkedAt: firebase.firestore.FieldValue.serverTimestamp(),
-    });
+    await updateUserWallet(msg.from.id, walletAddress);
     
     await bot.sendMessage(
       msg.chat.id,
@@ -177,10 +155,9 @@ bot.onText(/\/linkwallet (.+)/, async (msg, match) => {
 // Handle /claim command
 bot.onText(/\/claim/, async (msg) => {
   try {
-    const userRef = db.collection('users').doc(msg.from.id.toString());
-    const userDoc = await userRef.get();
+    const user = await getUser(msg.from.id);
     
-    if (!userDoc.exists) {
+    if (!user) {
       await bot.sendMessage(
         msg.chat.id,
         '❌ You need to participate in the chat first to earn rewards.',
@@ -189,9 +166,7 @@ bot.onText(/\/claim/, async (msg) => {
       return;
     }
     
-    const userData = userDoc.data();
-    
-    if (!userData.walletAddress) {
+    if (!user.walletAddress) {
       await bot.sendMessage(
         msg.chat.id,
         '❌ You need to link a Lightning wallet first using /linkwallet <address>.',
@@ -200,33 +175,19 @@ bot.onText(/\/claim/, async (msg) => {
       return;
     }
     
-    if (userData.balance <= 0) {
+    const amountToClaim = user.balance;
+    if (amountToClaim <= 0) {
       await bot.sendMessage(
         msg.chat.id,
-        '❌ You have no rewards to claim.',
+        '❌ You have no balance to claim.',
         { reply_to_message_id: msg.message_id }
       );
       return;
     }
     
-    // In a real implementation, this would call your Lightning Network API to send satoshis
-    // For now, we'll just update the user's balance in Firestore
-    const amountToClaim = userData.balance;
-    
-    // Record the claim in history
-    await db.collection('claimHistory').add({
-      userId: msg.from.id,
-      amount: amountToClaim,
-      timestamp: firebase.firestore.FieldValue.serverTimestamp(),
-      walletAddress: userData.walletAddress,
-      status: 'pending', // Would be updated by a webhook in a real implementation
-    });
-    
-    // Reset user's balance
-    await userRef.update({
-      balance: 0,
-      lastClaim: firebase.firestore.FieldValue.serverTimestamp(),
-    });
+    // In a real implementation, this would trigger a Lightning payment
+    // For now, we'll just reset the balance
+    await resetUserBalance(msg.from.id);
     
     await bot.sendMessage(
       msg.chat.id,
@@ -244,7 +205,7 @@ bot.onText(/\/claim/, async (msg) => {
 });
 
 // Handle pin message
-bot.onText(/\/pin (.+)/, async (msg, match) => {
+bot.onText(/\/pin/, async (msg) => {
   try {
     if (!msg.reply_to_message) {
       await bot.sendMessage(
@@ -255,53 +216,43 @@ bot.onText(/\/pin (.+)/, async (msg, match) => {
       return;
     }
     
-    const userRef = db.collection('users').doc(msg.from.id.toString());
-    const userDoc = await userRef.get();
+    const user = await getUser(msg.from.id);
     
-    if (!userDoc.exists || userDoc.data().balance < config.pinningCost) {
+    if (!user) {
       await bot.sendMessage(
         msg.chat.id,
-        `❌ You need at least ${config.pinningCost} sats in your balance to pin a message.`,
+        '❌ You need to participate in the chat first before you can pin messages.',
         { reply_to_message_id: msg.message_id }
       );
       return;
     }
     
-    // Deduct the pinning cost from user's balance
-    await userRef.update({
-      balance: firebase.firestore.FieldValue.increment(-config.pinningCost),
-    });
+    // Generate a unique invoice ID (in a real implementation, this would be from a Lightning Network API)
+    const invoiceId = `INV-${Date.now()}-${msg.from.id}`;
+    const cost = config.pinningCost;
     
-    // Pin the message
-    await bot.pinChatMessage(msg.chat.id, msg.reply_to_message.message_id);
+    // Log the donation for pinning
+    await logDonation(msg.from.id, cost, invoiceId, 'Message Pinning', msg.reply_to_message.message_id, msg.chat.id);
     
-    // Record the pinning in history
+    // Record the pinning request with pending status
     const expiryTime = new Date();
     expiryTime.setHours(expiryTime.getHours() + config.pinningDuration);
+    await addPinnedMessage(msg.reply_to_message.message_id, msg.chat.id, msg.from.id, cost, expiryTime, invoiceId);
     
-    await db.collection('pinnedMessages').add({
-      userId: msg.from.id,
-      cost: config.pinningCost,
-      messageId: msg.reply_to_message.message_id,
-      chatId: msg.chat.id,
-      pinnedAt: firebase.firestore.FieldValue.serverTimestamp(),
-      expiresAt: expiryTime,
-      messageText: msg.reply_to_message.text || '[media]',
-    });
-    
+    // In a real implementation, generate a Lightning invoice for the user to pay
+    // For now, we'll simulate with a placeholder message
     await bot.sendMessage(
       msg.chat.id,
-      `📌 Message pinned for ${config.pinningDuration} hours at a cost of ${config.pinningCost} sats.`,
+      `📌 To pin this message for ${config.pinningDuration} hours, you need to pay ${cost} sats.\n\nInvoice ID: ${invoiceId}\n\nPlease send ${cost} sats to [Lightning Address Placeholder]. Once payment is confirmed, the message will be pinned.`,
       { reply_to_message_id: msg.message_id }
     );
     
-    // Add the pinning cost to the daily reward pool
-    // This would distribute the pinning cost among active users in a real implementation
+    // Note: Actual pinning happens only after payment confirmation, which would be handled by a separate process or webhook
   } catch (error) {
-    console.error('Error pinning message:', error);
+    console.error('Error handling pin request:', error);
     await bot.sendMessage(
       msg.chat.id,
-      '❌ An error occurred while pinning the message. Please try again.',
+      '❌ An error occurred while processing your pin request. Please try again.',
       { reply_to_message_id: msg.message_id }
     );
   }
@@ -328,8 +279,7 @@ bot.onText(/\/setreward (\d+)/, async (msg, match) => {
     
     config.rewardPerMessage = newReward;
     
-    // Update config in Firestore for persistence
-    await db.collection('config').doc('rewardSettings').set(config, { merge: true });
+    // For now, config is stored in memory. In a real app, you'd persist this to the database
     
     await bot.sendMessage(
       msg.chat.id,
@@ -361,8 +311,7 @@ bot.onText(/\/setcap (\d+)/, async (msg, match) => {
     
     config.dailyRewardCap = newCap;
     
-    // Update config in Firestore for persistence
-    await db.collection('config').doc('rewardSettings').set(config, { merge: true });
+    // For now, config is stored in memory. In a real app, you'd persist this to the database
     
     await bot.sendMessage(
       msg.chat.id,
@@ -406,8 +355,7 @@ bot.onText(/\/setpin (\d+) (\d+)/, async (msg, match) => {
     config.pinningCost = newCost;
     config.pinningDuration = newDuration;
     
-    // Update config in Firestore for persistence
-    await db.collection('config').doc('rewardSettings').set(config, { merge: true });
+    // For now, config is stored in memory. In a real app, you'd persist this to the database
     
     await bot.sendMessage(
       msg.chat.id,
@@ -455,16 +403,12 @@ Made with ❤️ for the Bitcoin 2025 Hackathon
 async function checkExpiredPins() {
   try {
     const now = new Date();
-    const expiredPinsSnapshot = await db.collection('pinnedMessages')
-      .where('expiresAt', '<=', now)
-      .where('unpinned', '==', false)
-      .get();
+    const expiredPins = await getExpiredPins(now);
     
-    for (const doc of expiredPinsSnapshot.docs) {
-      const pinnedMsg = doc.data();
+    for (const pinnedMsg of expiredPins) {
       try {
         await bot.unpinChatMessage(pinnedMsg.chatId, pinnedMsg.messageId);
-        await doc.ref.update({ unpinned: true, unpinnedAt: firebase.firestore.FieldValue.serverTimestamp() });
+        await removePin(pinnedMsg.messageId, pinnedMsg.chatId);
       } catch (error) {
         console.error(`Error unpinning message ${pinnedMsg.messageId}:`, error);
       }
@@ -476,6 +420,30 @@ async function checkExpiredPins() {
 
 // Check for expired pins every hour
 setInterval(checkExpiredPins, 60 * 60 * 1000);
+
+// Placeholder for payment confirmation (would be triggered by a webhook or external API in a real implementation)
+async function handlePaymentConfirmation(invoiceId, status) {
+  try {
+    // Update donation status
+    await updateDonationStatus(invoiceId, status);
+    
+    // Update pin payment status
+    await updatePinPaymentStatus(invoiceId, status);
+    
+    if (status === 'completed') {
+      // Retrieve the pin record
+      const [pinRows] = await pool.query('SELECT * FROM pinnedMessages WHERE invoiceId = ?', [invoiceId]);
+      if (pinRows.length > 0) {
+        const pin = pinRows[0];
+        // Pin the message
+        await bot.pinChatMessage(pin.chatId, pin.messageId);
+        console.log(`Message ${pin.messageId} pinned after payment confirmation for invoice ${invoiceId}`);
+      }
+    }
+  } catch (error) {
+    console.error('Error handling payment confirmation:', error);
+  }
+}
 
 // Start message
 console.log('SatChat Bot is running...');
