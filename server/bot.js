@@ -15,8 +15,12 @@ import {
   removePin,
   logDonation,
   updateDonationStatus,
-  updatePinPaymentStatus
+  updatePinPaymentStatus,
+  getRewardKeywords,
+  addRewardKeyword
 } from './database.js';
+import opennode from 'opennode';
+import express from 'express';
 
 // Load environment variables
 dotenv.config();
@@ -27,6 +31,9 @@ initializeDatabase();
 // Initialize the bot with your token
 const token = process.env.TELEGRAM_BOT_TOKEN || 'YOUR_TELEGRAM_BOT_TOKEN';
 const bot = new TelegramBot(token, { polling: true });
+
+// Configure OpenNode with API key from environment variables
+opennode.setCredentials(process.env.OPENNODE_API_KEY || 'YOUR_OPENNODE_API_KEY');
 
 // Default configuration values
 let config = {
@@ -43,6 +50,20 @@ let dailyRewards = {
   messageCount: 0,
   activeUsers: new Set(),
 };
+
+// Reward keywords with multipliers
+let rewardKeywords = [];
+
+// Load reward keywords from database on startup
+async function loadRewardKeywords() {
+  try {
+    rewardKeywords = await getRewardKeywords();
+    console.log('Reward keywords loaded:', rewardKeywords);
+  } catch (error) {
+    console.error('Error loading reward keywords:', error);
+  }
+}
+loadRewardKeywords();
 
 // Helper function to reset daily stats at midnight
 function resetDailyStats() {
@@ -77,7 +98,11 @@ bot.on('message', async (msg) => {
     
     // Check if daily cap is reached
     if (dailyRewards.totalDistributed >= config.dailyRewardCap) {
-      // Optional: notify the group that daily limit is reached
+      // Notify the group that daily limit is reached
+      await bot.sendMessage(
+        msg.chat.id,
+        '⚠️ Daily reward cap of ' + config.dailyRewardCap + ' sats has been reached. No more rewards will be distributed today.'
+      );
       return;
     }
     
@@ -92,16 +117,29 @@ bot.on('message', async (msg) => {
       });
     }
     
+    // Calculate reward with multiplier based on message content
+    let reward = config.rewardPerMessage;
+    let highestMultiplier = 1.0;
+    if (msg.text) {
+      const messageTextLower = msg.text.toLowerCase();
+      for (const { keyword, multiplier } of rewardKeywords) {
+        if (messageTextLower.includes(keyword.toLowerCase()) && multiplier > highestMultiplier) {
+          highestMultiplier = multiplier;
+        }
+      }
+      reward = Math.floor(config.rewardPerMessage * highestMultiplier);
+    }
+    
     // Award Satoshis for the message
-    await updateUserBalance(msg.from.id, config.rewardPerMessage);
+    await updateUserBalance(msg.from.id, reward);
     
     // Update daily stats
-    dailyRewards.totalDistributed += config.rewardPerMessage;
+    dailyRewards.totalDistributed += reward;
     dailyRewards.messageCount += 1;
     dailyRewards.activeUsers.add(msg.from.id);
     
     // Log the reward in history
-    await logReward(msg.from.id, config.rewardPerMessage, msg.message_id, msg.chat.id, msg.text || '[media]');
+    await logReward(msg.from.id, reward, msg.message_id, msg.chat.id, msg.text || '[media]');
     
     // Get Bitcoin fact
     const fact = getBitcoinFact();
@@ -185,15 +223,39 @@ bot.onText(/\/claim/, async (msg) => {
       return;
     }
     
-    // In a real implementation, this would trigger a Lightning payment
-    // For now, we'll just reset the balance
-    await resetUserBalance(msg.from.id);
-    
-    await bot.sendMessage(
-      msg.chat.id,
-      `✅ Claim request for ${amountToClaim} sats has been submitted! Funds will be sent to your Lightning wallet shortly.`,
-      { reply_to_message_id: msg.message_id }
-    );
+    // Create a charge using OpenNode
+    try {
+      const charge = await opennode.createCharge({
+        amount: amountToClaim,
+        currency: 'BTC', // Use BTC for satoshis
+        description: `SatChat Reward Claim for user ${msg.from.id}`,
+        customer_email: '', // Optional, can be added if needed
+        callback_url: process.env.WEBHOOK_URL || 'YOUR_WEBHOOK_URL_FOR_PAYMENT_CONFIRMATION',
+        success_url: '', // Optional
+        auto_settle: true // Automatically settle to user's wallet if possible
+      });
+      
+      if (charge && charge.id) {
+        // Log the charge attempt
+        await logDonation(msg.from.id, amountToClaim, charge.id, 'Reward Claim');
+        // Temporarily reset balance (will be finalized on webhook confirmation)
+        await resetUserBalance(msg.from.id);
+        await bot.sendMessage(
+          msg.chat.id,
+          `✅ Claim request for ${amountToClaim} sats has been submitted! Funds will be sent to your Lightning wallet shortly. Invoice ID: ${charge.id}`,
+          { reply_to_message_id: msg.message_id }
+        );
+      } else {
+        throw new Error('Failed to create charge');
+      }
+    } catch (paymentError) {
+      console.error('Error creating OpenNode charge:', paymentError);
+      await bot.sendMessage(
+        msg.chat.id,
+        '❌ An error occurred while processing your claim. Please try again later.',
+        { reply_to_message_id: msg.message_id }
+      );
+    }
   } catch (error) {
     console.error('Error claiming rewards:', error);
     await bot.sendMessage(
@@ -227,7 +289,7 @@ bot.onText(/\/pin/, async (msg) => {
       return;
     }
     
-    // Generate a unique invoice ID (in a real implementation, this would be from a Lightning Network API)
+    // Generate a unique invoice ID
     const invoiceId = `INV-${Date.now()}-${msg.from.id}`;
     const cost = config.pinningCost;
     
@@ -239,20 +301,78 @@ bot.onText(/\/pin/, async (msg) => {
     expiryTime.setHours(expiryTime.getHours() + config.pinningDuration);
     await addPinnedMessage(msg.reply_to_message.message_id, msg.chat.id, msg.from.id, cost, expiryTime, invoiceId);
     
-    // In a real implementation, generate a Lightning invoice for the user to pay
-    // For now, we'll simulate with a placeholder message
-    await bot.sendMessage(
-      msg.chat.id,
-      `📌 To pin this message for ${config.pinningDuration} hours, you need to pay ${cost} sats.\n\nInvoice ID: ${invoiceId}\n\nPlease send ${cost} sats to [Lightning Address Placeholder]. Once payment is confirmed, the message will be pinned.`,
-      { reply_to_message_id: msg.message_id }
-    );
-    
-    // Note: Actual pinning happens only after payment confirmation, which would be handled by a separate process or webhook
+    // Create a charge using OpenNode for pinning cost
+    try {
+      const charge = await opennode.createCharge({
+        amount: cost,
+        currency: 'BTC', // Use BTC for satoshis
+        description: `SatChat Message Pinning for message ${msg.reply_to_message.message_id}`,
+        customer_email: '', // Optional
+        callback_url: process.env.WEBHOOK_URL || 'YOUR_WEBHOOK_URL_FOR_PAYMENT_CONFIRMATION',
+        success_url: '', // Optional
+        auto_settle: false // Manual settlement for pinning
+      });
+      
+      if (charge && charge.id) {
+        // Update invoiceId with OpenNode charge ID
+        await pool.query('UPDATE pinnedMessages SET invoiceId = ? WHERE invoiceId = ?', [charge.id, invoiceId]);
+        await pool.query('UPDATE donations SET invoiceId = ? WHERE invoiceId = ?', [charge.id, invoiceId]);
+        await bot.sendMessage(
+          msg.chat.id,
+          `📌 To pin this message for ${config.pinningDuration} hours, you need to pay ${cost} sats.
+
+Invoice ID: ${charge.id}
+
+Please send ${cost} sats using the following Lightning invoice: ${charge.lightning_invoice.payreq}
+
+Once payment is confirmed, the message will be pinned.`,
+          { reply_to_message_id: msg.message_id }
+        );
+      } else {
+        throw new Error('Failed to create charge for pinning');
+      }
+    } catch (paymentError) {
+      console.error('Error creating OpenNode charge for pinning:', paymentError);
+      await bot.sendMessage(
+        msg.chat.id,
+        '❌ An error occurred while generating the payment request for pinning. Please try again.',
+        { reply_to_message_id: msg.message_id }
+      );
+    }
   } catch (error) {
     console.error('Error handling pin request:', error);
     await bot.sendMessage(
       msg.chat.id,
       '❌ An error occurred while processing your pin request. Please try again.',
+      { reply_to_message_id: msg.message_id }
+    );
+  }
+});
+
+// Handle /balance command
+bot.onText(/\/balance/, async (msg) => {
+  try {
+    const user = await getUser(msg.from.id);
+    
+    if (!user) {
+      await bot.sendMessage(
+        msg.chat.id,
+        '❌ You need to participate in the chat first to earn rewards.',
+        { reply_to_message_id: msg.message_id }
+      );
+      return;
+    }
+    
+    await bot.sendMessage(
+      msg.chat.id,
+      `💰 Your current balance is ${user.balance} sats. Use /claim to transfer to your Lightning wallet.`,
+      { reply_to_message_id: msg.message_id }
+    );
+  } catch (error) {
+    console.error('Error checking balance:', error);
+    await bot.sendMessage(
+      msg.chat.id,
+      '❌ An error occurred while checking your balance. Please try again.',
       { reply_to_message_id: msg.message_id }
     );
   }
@@ -278,8 +398,7 @@ bot.onText(/\/setreward (\d+)/, async (msg, match) => {
     }
     
     config.rewardPerMessage = newReward;
-    
-    // For now, config is stored in memory. In a real app, you'd persist this to the database
+    await saveConfig();
     
     await bot.sendMessage(
       msg.chat.id,
@@ -310,8 +429,7 @@ bot.onText(/\/setcap (\d+)/, async (msg, match) => {
     }
     
     config.dailyRewardCap = newCap;
-    
-    // For now, config is stored in memory. In a real app, you'd persist this to the database
+    await saveConfig();
     
     await bot.sendMessage(
       msg.chat.id,
@@ -354,8 +472,7 @@ bot.onText(/\/setpin (\d+) (\d+)/, async (msg, match) => {
     
     config.pinningCost = newCost;
     config.pinningDuration = newDuration;
-    
-    // For now, config is stored in memory. In a real app, you'd persist this to the database
+    await saveConfig();
     
     await bot.sendMessage(
       msg.chat.id,
@@ -364,6 +481,46 @@ bot.onText(/\/setpin (\d+) (\d+)/, async (msg, match) => {
     );
   } catch (error) {
     console.error('Error setting pinning options:', error);
+  }
+});
+
+// New admin command to add or update reward-boosting keywords with multipliers
+bot.onText(/\/addkeyword (\w+) (\d+\.?\d*)/, async (msg, match) => {
+  try {
+    // Check if user is admin
+    const chatMember = await bot.getChatMember(msg.chat.id, msg.from.id);
+    if (!['creator', 'administrator'].includes(chatMember.status)) {
+      return; // Silently ignore if not admin
+    }
+    
+    const keyword = match[1];
+    const multiplier = parseFloat(match[2]);
+    
+    if (isNaN(multiplier) || multiplier < 1.0 || multiplier > 10.0) {
+      await bot.sendMessage(
+        msg.chat.id,
+        '❌ Multiplier must be between 1.0 and 10.0.',
+        { reply_to_message_id: msg.message_id }
+      );
+      return;
+    }
+    
+    await addRewardKeyword(keyword, multiplier);
+    // Reload keywords to update in-memory list
+    await loadRewardKeywords();
+    
+    await bot.sendMessage(
+      msg.chat.id,
+      `✅ Keyword "${keyword}" added with a reward multiplier of ${multiplier}x.`,
+      { reply_to_message_id: msg.message_id }
+    );
+  } catch (error) {
+    console.error('Error adding reward keyword:', error);
+    await bot.sendMessage(
+      msg.chat.id,
+      '❌ An error occurred while adding the keyword. Please try again.',
+      { reply_to_message_id: msg.message_id }
+    );
   }
 });
 
@@ -383,6 +540,7 @@ bot.onText(/\/help/, async (msg) => {
 /setreward <amount> - Set reward per message
 /setcap <amount> - Set daily reward cap
 /setpin <cost> <hours> - Set pinning cost and duration
+/addkeyword <word> <multiplier> - Add or update a keyword that boosts rewards (multiplier between 1.0-10.0)
 
 <b>Current Settings:</b>
 • Reward per message: ${config.rewardPerMessage} sats
@@ -421,29 +579,90 @@ async function checkExpiredPins() {
 // Check for expired pins every hour
 setInterval(checkExpiredPins, 60 * 60 * 1000);
 
-// Placeholder for payment confirmation (would be triggered by a webhook or external API in a real implementation)
-async function handlePaymentConfirmation(invoiceId, status) {
+// Webhook endpoint for OpenNode payment confirmation (requires express or similar setup)
+// Note: This is a placeholder; actual implementation requires a server setup
+const app = express();
+app.use(express.json());
+
+app.post('/webhook/payment', async (req, res) => {
   try {
-    // Update donation status
-    await updateDonationStatus(invoiceId, status);
-    
-    // Update pin payment status
-    await updatePinPaymentStatus(invoiceId, status);
-    
-    if (status === 'completed') {
-      // Retrieve the pin record
-      const [pinRows] = await pool.query('SELECT * FROM pinnedMessages WHERE invoiceId = ?', [invoiceId]);
-      if (pinRows.length > 0) {
-        const pin = pinRows[0];
-        // Pin the message
-        await bot.pinChatMessage(pin.chatId, pin.messageId);
-        console.log(`Message ${pin.messageId} pinned after payment confirmation for invoice ${invoiceId}`);
+    const { id, status, type } = req.body;
+    if (type === 'charge') {
+      console.log(`Received payment update for charge ${id}: ${status}`);
+      if (status === 'paid') {
+        // Update donation status
+        await updateDonationStatus(id, 'completed');
+        // Check if it's for pinning
+        const [pinRows] = await pool.query('SELECT * FROM pinnedMessages WHERE invoiceId = ?', [id]);
+        if (pinRows.length > 0) {
+          const pin = pinRows[0];
+          await updatePinPaymentStatus(id, 'completed');
+          await bot.pinChatMessage(pin.chatId, pin.messageId);
+          console.log(`Message ${pin.messageId} pinned after payment confirmation for invoice ${id}`);
+          await bot.sendMessage(pin.chatId, `📌 Message has been pinned successfully for ${config.pinningDuration} hours!`);
+        } else {
+          // Assume it's a claim if not a pin
+          console.log(`Claim payment confirmed for invoice ${id}`);
+        }
+      } else if (status === 'failed' || status === 'expired') {
+        await updateDonationStatus(id, 'failed');
+        await updatePinPaymentStatus(id, 'failed');
+        console.log(`Payment failed or expired for invoice ${id}`);
       }
     }
+    res.status(200).send('Webhook received');
   } catch (error) {
-    console.error('Error handling payment confirmation:', error);
+    console.error('Error processing webhook:', error);
+    res.status(500).send('Error processing webhook');
+  }
+});
+
+// Start the webhook server (adjust port as needed)
+const webhookPort = process.env.WEBHOOK_PORT || 3000;
+app.listen(webhookPort, () => {
+  console.log(`Webhook server running on port ${webhookPort}`);
+});
+
+// Function to load configuration from database
+async function loadConfig() {
+  try {
+    const [rows] = await pool.query('SELECT * FROM config WHERE id = 1');
+    if (rows.length > 0) {
+      config = {
+        rewardPerMessage: rows[0].rewardPerMessage,
+        dailyRewardCap: rows[0].dailyRewardCap,
+        pinningCost: rows[0].pinningCost,
+        pinningDuration: rows[0].pinningDuration,
+      };
+      console.log('Configuration loaded from database:', config);
+    } else {
+      // Default values if no config in database
+      await pool.query(
+        'INSERT INTO config (id, rewardPerMessage, dailyRewardCap, pinningCost, pinningDuration) VALUES (1, ?, ?, ?, ?)',
+        [config.rewardPerMessage, config.dailyRewardCap, config.pinningCost, config.pinningDuration]
+      );
+      console.log('Default configuration saved to database:', config);
+    }
+  } catch (error) {
+    console.error('Error loading configuration:', error);
   }
 }
+
+// Function to save configuration to database
+async function saveConfig() {
+  try {
+    await pool.query(
+      'UPDATE config SET rewardPerMessage = ?, dailyRewardCap = ?, pinningCost = ?, pinningDuration = ? WHERE id = 1',
+      [config.rewardPerMessage, config.dailyRewardCap, config.pinningCost, config.pinningDuration]
+    );
+    console.log('Configuration saved to database:', config);
+  } catch (error) {
+    console.error('Error saving configuration:', error);
+  }
+}
+
+// Load config on startup
+loadConfig();
 
 // Start message
 console.log('SatChat Bot is running...');

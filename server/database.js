@@ -97,6 +97,28 @@ async function initializeDatabase() {
       )
     `);
     
+    // Create rewardKeywords table to store keywords that boost message rewards with multipliers
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS rewardKeywords (
+        id BIGINT AUTO_INCREMENT PRIMARY KEY,
+        keyword VARCHAR(255) UNIQUE,
+        multiplier DECIMAL(5,2) DEFAULT 1.0,
+        createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updatedAt TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      )
+    `);
+    
+    // Create config table to store bot configuration settings
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS config (
+        id BIGINT PRIMARY KEY,
+        rewardPerMessage BIGINT DEFAULT 1,
+        dailyRewardCap BIGINT DEFAULT 10000,
+        pinningCost BIGINT DEFAULT 1000,
+        pinningDuration BIGINT DEFAULT 24
+      )
+    `);
+    
     console.log('Database and tables initialized successfully');
     connection.release();
   } catch (error) {
@@ -198,6 +220,19 @@ async function getDonationStats() {
   return totalRows[0];
 }
 
+// Reward keywords functions
+async function addRewardKeyword(keyword, multiplier) {
+  await pool.query(
+    'INSERT INTO rewardKeywords (keyword, multiplier) VALUES (?, ?) ON DUPLICATE KEY UPDATE multiplier = ?, updatedAt = NOW()',
+    [keyword, multiplier, multiplier]
+  );
+}
+
+async function getRewardKeywords() {
+  const [rows] = await pool.query('SELECT * FROM rewardKeywords');
+  return rows;
+}
+
 export {
   initializeDatabase,
   getUser,
@@ -213,5 +248,7 @@ export {
   removePin,
   logDonation,
   updateDonationStatus,
-  getDonationStats
+  getDonationStats,
+  addRewardKeyword,
+  getRewardKeywords
 };
