@@ -1,79 +1,130 @@
-# SatChat Bot
+# SatChat
 
-**SatChat** is a Telegram bot designed for the Bitcoin 2025 Hackathon. It rewards users with satoshis (sats) for participating in chat groups, allows message pinning for a fee, and supports claiming rewards to Lightning wallets.
+SatChat is a modern web application that integrates cryptocurrency functionality with a Telegram bot interface. Built with React, TypeScript, and Node.js, it provides a seamless experience for managing cryptocurrency transactions and interactions.
 
 ## Features
-- **User Rewards**: Earn sats for sending messages in the chat.
-- **Keyword Multipliers**: Certain keywords boost reward amounts.
-- **Wallet Linking**: Link a Lightning wallet to claim rewards.
-- **Message Pinning**: Pay to pin messages for a specified duration.
-- **Admin Controls**: Configure reward settings, daily caps, pinning costs, and keywords.
-- **Daily Stats**: Tracks and resets daily reward distribution.
 
-## Setup Instructions
+- 🚀 Modern React-based dashboard
+- 💰 Cryptocurrency wallet integration
+- 🤖 Telegram bot functionality
+- 📊 Analytics and reporting
+- 🔐 Secure wallet connection
+- 👨‍💼 Admin panel for management
 
-### Prerequisites
-- Node.js and npm installed on your system.
-- MySQL database server.
-- Telegram Bot Token from BotFather.
-- OpenNode account for Lightning Network payments.
+## Tech Stack
 
-### Installation
-1. **Clone the Repository**:
-   ```bash
-   git clone <repository-url>
-   cd SatChat
-   ```
-2. **Install Dependencies**:
-   ```bash
-   npm install
-   ```
-3. **Set Up Environment Variables**:
-   - Create a `.env` file in the root directory.
-   - Add the following:
-     ```
-     TELEGRAM_BOT_TOKEN=your_telegram_bot_token
-     DB_HOST=your_database_host
-     DB_USER=your_database_user
-     DB_PASSWORD=your_database_password
-     DB_NAME=your_database_name
-     OPENNODE_API_KEY=your_opennode_api_key
-     WEBHOOK_URL=your_webhook_url_for_payment_confirmation
-     WEBHOOK_PORT=3000
-     ```
-4. **Database Setup**:
-   - Create the necessary tables by running the SQL scripts found in `server/database.sql`.
-5. **Run the Bot**:
-   ```bash
-   node server/bot.js
-   ```
+### Frontend
+- React 18
+- TypeScript
+- React Router DOM
+- TailwindCSS
+- Vite
+- Recharts for analytics
+- Lucide React for icons
 
-## Usage
-- **User Commands**:
-  - `/linkwallet <address>`: Link your Lightning wallet.
-  - `/claim`: Claim your earned sats.
-  - `/pin`: Reply to a message to pin it (costs sats).
-  - `/balance`: Check your current balance.
-  - `/help`: View all commands and settings.
-- **Admin Commands**:
-  - `/setreward <amount>`: Set reward per message.
-  - `/setcap <amount>`: Set daily reward cap.
-  - `/setpin <cost> <hours>`: Set pinning cost and duration.
-  - `/addkeyword <word> <multiplier>`: Add a keyword that boosts rewards.
+### Backend
+- Node.js
+- Express.js
+- Python (for bot functionality)
+- MySQL Database
+- OpenNode API integration
+- Telegram Bot API
+
+## Prerequisites
+
+- Node.js (v18 or higher)
+- Python 3.x
+- MySQL Server
+- Telegram Bot Token
+- OpenNode API Key
+
+## Installation
+
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/satchat.git
+cd satchat
+```
+
+2. Install frontend dependencies:
+```bash
+npm install
+```
+
+3. Install Python dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+4. Create a `.env` file in the root directory with the following variables:
+```env
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+OPENNODE_API_KEY=your_opennode_api_key
+DB_HOST=localhost
+DB_USER=your_db_user
+DB_PASSWORD=your_db_password
+DB_NAME=satchat
+```
 
 ## Development
-- **Database Schema**: Managed in `server/database.js`.
-- **Bot Logic**: Found in `server/bot.js`.
 
-## Lightning Network Integration
-- **OpenNode Integration**: SatChat uses OpenNode for Lightning Network payments.
-  1. Sign up for an OpenNode account at [opennode.com](https://opennode.com) to obtain API credentials.
-  2. Add your OpenNode API key to the `.env` file as `OPENNODE_API_KEY`.
-  3. Set up a webhook URL for payment confirmations. For local development, use a service like ngrok to expose your local server (e.g., `ngrok http 3000`) and set `WEBHOOK_URL` in the `.env` file.
-  4. For production, deploy the bot to a server with a public IP and secure the webhook endpoint.
+1. Start the frontend development server:
+```bash
+npm run dev
+```
+
+2. Start the Telegram bot:
+```bash
+npm run start:bot
+```
+
+## Building for Production
+
+1. Build the frontend:
+```bash
+npm run build
+```
+
+2. Preview the production build:
+```bash
+npm run preview
+```
+
+## Project Structure
+
+```
+satchat/
+├── src/                    # Frontend source code
+│   ├── components/        # Reusable React components
+│   ├── pages/            # Page components
+│   └── App.tsx           # Main application component
+├── server/                # Backend server code
+│   ├── bot.js            # Telegram bot implementation
+│   ├── database.js       # Database operations
+│   └── utils/            # Utility functions
+├── public/               # Static assets
+└── dist/                # Production build output
+```
 
 ## Contributing
-Contributions are welcome! Please submit pull requests or open issues for bugs and feature requests.
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
 
 ## License
-Made with ❤️ for the Bitcoin 2025 Hackathon.
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Support
+
+For support, please open an issue in the GitHub repository or contact the maintainers.
+
+## Acknowledgments
+
+- [OpenNode](https://www.opennode.com/) for cryptocurrency payment processing
+- [Telegram Bot API](https://core.telegram.org/bots/api) for bot functionality
+- [React](https://reactjs.org/) for the frontend framework
+- [TailwindCSS](https://tailwindcss.com/) for styling
