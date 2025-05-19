@@ -141,6 +141,21 @@ async def add_reward_keyword(keyword: str, multiplier: float) -> None:
         cursor.close()
         conn.close()
 
+async def update_wallet_address(telegram_id: int, wallet_address: str) -> bool:
+    """Update user's Lightning wallet address."""
+    try:
+        conn = connection_pool.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            'UPDATE users SET walletAddress = %s, walletLinkedAt = NOW() WHERE telegramId = %s',
+            (wallet_address, telegram_id)
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        cursor.close()
+        conn.close()
+
 async def get_reward_keywords() -> List[Dict[str, Any]]:
     """Get all reward keywords."""
     try:
