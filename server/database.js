@@ -97,9 +97,9 @@ async function initializeDatabase() {
       )
     `);
     
-    // Create rewardKeywords table to store keywords that boost message rewards with multipliers
+    // Create rewardkeywords table to store keywords that boost message rewards with multipliers
     await connection.query(`
-      CREATE TABLE IF NOT EXISTS rewardKeywords (
+      CREATE TABLE IF NOT EXISTS rewardkeywords (
         id BIGINT AUTO_INCREMENT PRIMARY KEY,
         keyword VARCHAR(255) UNIQUE,
         multiplier DECIMAL(5,2) DEFAULT 1.0,
@@ -223,13 +223,13 @@ async function getDonationStats() {
 // Reward keywords functions
 async function addRewardKeyword(keyword, multiplier) {
   await pool.query(
-    'INSERT INTO rewardKeywords (keyword, multiplier) VALUES (?, ?) ON DUPLICATE KEY UPDATE multiplier = ?, updatedAt = NOW()',
+    'INSERT INTO rewardkeywords (keyword, multiplier) VALUES (?, ?) ON DUPLICATE KEY UPDATE multiplier = ?, updatedAt = NOW()',
     [keyword, multiplier, multiplier]
   );
 }
 
 async function getRewardKeywords() {
-  const [rows] = await pool.query('SELECT * FROM rewardKeywords');
+  const [rows] = await pool.query('SELECT * FROM rewardkeywords');
   return rows;
 }
 
@@ -249,6 +249,7 @@ export {
   logDonation,
   updateDonationStatus,
   getDonationStats,
-  addRewardKeyword,
-  getRewardKeywords
+  addRewardKeyword, 
+  getRewardKeywords,
+  pool
 };

@@ -17,7 +17,8 @@ import {
   updateDonationStatus,
   updatePinPaymentStatus,
   getRewardKeywords,
-  addRewardKeyword
+  addRewardKeyword,
+  pool
 } from './database.js';
 import opennode from 'opennode';
 import express from 'express';
@@ -239,7 +240,7 @@ bot.onText(/\/claim/, async (msg) => {
         // Log the charge attempt
         await logDonation(msg.from.id, amountToClaim, charge.id, 'Reward Claim');
         // Temporarily reset balance (will be finalized on webhook confirmation)
-        await resetUserBalance(msg.from.id);
+    await resetUserBalance(msg.from.id);
         await bot.sendMessage(
           msg.chat.id,
           `✅ Claim request for ${amountToClaim} sats has been submitted! Funds will be sent to your Lightning wallet shortly. Invoice ID: ${charge.id}`,
@@ -250,11 +251,11 @@ bot.onText(/\/claim/, async (msg) => {
       }
     } catch (paymentError) {
       console.error('Error creating OpenNode charge:', paymentError);
-      await bot.sendMessage(
-        msg.chat.id,
+    await bot.sendMessage(
+      msg.chat.id,
         '❌ An error occurred while processing your claim. Please try again later.',
-        { reply_to_message_id: msg.message_id }
-      );
+      { reply_to_message_id: msg.message_id }
+    );
     }
   } catch (error) {
     console.error('Error claiming rewards:', error);
@@ -333,11 +334,11 @@ Once payment is confirmed, the message will be pinned.`,
       }
     } catch (paymentError) {
       console.error('Error creating OpenNode charge for pinning:', paymentError);
-      await bot.sendMessage(
-        msg.chat.id,
+    await bot.sendMessage(
+      msg.chat.id,
         '❌ An error occurred while generating the payment request for pinning. Please try again.',
-        { reply_to_message_id: msg.message_id }
-      );
+      { reply_to_message_id: msg.message_id }
+    );
     }
   } catch (error) {
     console.error('Error handling pin request:', error);
@@ -590,20 +591,20 @@ app.post('/webhook/payment', async (req, res) => {
     if (type === 'charge') {
       console.log(`Received payment update for charge ${id}: ${status}`);
       if (status === 'paid') {
-        // Update donation status
+    // Update donation status
         await updateDonationStatus(id, 'completed');
         // Check if it's for pinning
         const [pinRows] = await pool.query('SELECT * FROM pinnedMessages WHERE invoiceId = ?', [id]);
-        if (pinRows.length > 0) {
-          const pin = pinRows[0];
+      if (pinRows.length > 0) {
+        const pin = pinRows[0];
           await updatePinPaymentStatus(id, 'completed');
-          await bot.pinChatMessage(pin.chatId, pin.messageId);
+        await bot.pinChatMessage(pin.chatId, pin.messageId);
           console.log(`Message ${pin.messageId} pinned after payment confirmation for invoice ${id}`);
           await bot.sendMessage(pin.chatId, `📌 Message has been pinned successfully for ${config.pinningDuration} hours!`);
         } else {
           // Assume it's a claim if not a pin
           console.log(`Claim payment confirmed for invoice ${id}`);
-        }
+      }
       } else if (status === 'failed' || status === 'expired') {
         await updateDonationStatus(id, 'failed');
         await updatePinPaymentStatus(id, 'failed');
