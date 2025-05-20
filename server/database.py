@@ -25,18 +25,17 @@ async def initialize_database():
         # Create users table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
-                id BIGINT PRIMARY KEY AUTO_INCREMENT,
-                telegramId BIGINT UNIQUE,
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                telegramId BIGINT UNIQUE NOT NULL,
                 username VARCHAR(255),
                 firstName VARCHAR(255),
                 lastName VARCHAR(255),
-                balance BIGINT DEFAULT 0,
-                totalEarned BIGINT DEFAULT 0,
-                messageCount BIGINT DEFAULT 0,
-                walletAddress TEXT,
+                balance INT DEFAULT 0,
+                totalEarned INT DEFAULT 0,
+                messageCount INT DEFAULT 0,
+                lastActive TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                lastActive TIMESTAMP,
-                walletLinkedAt TIMESTAMP
+                updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             )
         """)
         
@@ -141,17 +140,30 @@ async def add_reward_keyword(keyword: str, multiplier: float) -> None:
         cursor.close()
         conn.close()
 
-async def update_wallet_address(telegram_id: int, wallet_address: str) -> bool:
-    """Update user's Lightning wallet address."""
+async def update_wallet_address(telegram_id: int, wallet_address: str, network: str = 'lightning', type: str = 'lightning') -> bool:
+    """Update user's wallet address."""
     try:
         conn = connection_pool.get_connection()
         cursor = conn.cursor()
-        cursor.execute(
-            'UPDATE users SET walletAddress = %s, walletLinkedAt = NOW() WHERE telegramId = %s',
-            (wallet_address, telegram_id)
-        )
+        
+        # Get user ID from telegram ID
+        cursor.execute('SELECT id FROM users WHERE telegramId = %s', (telegram_id,))
+        user = cursor.fetchone()
+        if not user:
+            return False
+            
+        # Insert or update wallet address
+        cursor.execute("""
+            INSERT INTO wallet_addresses (userId, network, address, type, isDefault)
+            VALUES (%s, %s, %s, %s, true)
+            ON DUPLICATE KEY UPDATE
+            address = VALUES(address),
+            isDefault = VALUES(isDefault),
+            updatedAt = CURRENT_TIMESTAMP
+        """, (user[0], network, wallet_address, type))
+        
         conn.commit()
-        return cursor.rowcount > 0
+        return True
     finally:
         cursor.close()
         conn.close()

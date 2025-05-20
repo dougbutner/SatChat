@@ -1,6 +1,7 @@
 import TelegramBot from 'node-telegram-bot-api';
 import dotenv from 'dotenv';
 import { getBitcoinFact } from './utils/facts.js';
+import paymentService from './payment.js';
 import {
   initializeDatabase,
   getUser,
@@ -18,9 +19,11 @@ import {
   updatePinPaymentStatus,
   getRewardKeywords,
   addRewardKeyword,
-  pool
+  pool,
+  getWalletAddresses,
+  addWalletAddress,
+  getDefaultWalletAddress
 } from './database.js';
-import opennode from 'opennode';
 import express from 'express';
 
 // Load environment variables
@@ -30,11 +33,8 @@ dotenv.config();
 initializeDatabase();
 
 // Initialize the bot with your token
-const token = process.env.TELEGRAM_BOT_TOKEN || 'YOUR_TELEGRAM_BOT_TOKEN';
+const token = process.env.TELEGRAM_BOT_TOKEN || '7453633569:AAHr4UsNmucKwTUg9qaRU5dfZynQbkx-QGg';
 const bot = new TelegramBot(token, { polling: true });
-
-// Configure OpenNode with API key from environment variables
-opennode.setCredentials(process.env.OPENNODE_API_KEY || 'YOUR_OPENNODE_API_KEY');
 
 // Default configuration values
 let config = {
@@ -161,24 +161,73 @@ bot.on('message', async (msg) => {
 // Handle /linkwallet command
 bot.onText(/\/linkwallet (.+)/, async (msg, match) => {
   try {
-    const walletAddress = match[1].trim();
-    
-    // Simple validation - in a real app, you'd want more robust validation
-    if (!walletAddress.startsWith('ln')) {
+    const args = match[1].trim().split(' ');
+    if (args.length < 2) {
       await bot.sendMessage(
         msg.chat.id,
-        '❌ Invalid Lightning wallet address. Please provide an address starting with "ln".', 
+        '❌ Invalid command format. Please use:\n' +
+        '/linkwallet <network> <address>\n\n' +
+        'Supported networks:\n' +
+        '• lightning - Lightning Network address (starts with ln)\n' +
+        '• btc - Bitcoin address\n' +
+        '• exsat - exSat native address\n' +
+        '• exsat-evm - exSat EVM address\n\n' +
+        'Example: /linkwallet lightning lnurl1...',
         { reply_to_message_id: msg.message_id }
       );
       return;
     }
-    
-    // Update user's wallet address
-    await updateUserWallet(msg.from.id, walletAddress);
+
+    const [network, address] = args;
+    let type = 'default';
+    let isValid = false;
+
+    // Validate address format based on network
+    switch (network.toLowerCase()) {
+      case 'lightning':
+        isValid = address.startsWith('ln');
+        type = 'lightning';
+        break;
+      case 'btc':
+        isValid = /^[13][a-km-zA-HJ-NP-Z1-9]{25,34}$/.test(address);
+        type = 'bitcoin';
+        break;
+      case 'exsat':
+        isValid = /^[a-zA-Z0-9]{42}$/.test(address);
+        type = 'native';
+        break;
+      case 'exsat-evm':
+        isValid = /^0x[a-fA-F0-9]{40}$/.test(address);
+        type = 'evm';
+        break;
+      default:
+        await bot.sendMessage(
+          msg.chat.id,
+          '❌ Unsupported network. Please use: lightning, btc, exsat, or exsat-evm',
+          { reply_to_message_id: msg.message_id }
+        );
+        return;
+    }
+
+    if (!isValid) {
+      await bot.sendMessage(
+        msg.chat.id,
+        `❌ Invalid ${network} address format. Please check and try again.`,
+        { reply_to_message_id: msg.message_id }
+      );
+      return;
+    }
+
+    // Add the wallet address
+    await addWalletAddress(msg.from.id, network.toLowerCase(), address, type, true);
     
     await bot.sendMessage(
       msg.chat.id,
-      '✅ Your Lightning wallet has been successfully linked! You can now claim your rewards using /claim.',
+      `✅ Your ${network} wallet has been successfully linked!\n\n` +
+      `Network: ${network}\n` +
+      `Type: ${type}\n` +
+      `Address: ${address}\n\n` +
+      'You can now claim your rewards using /claim.',
       { reply_to_message_id: msg.message_id }
     );
   } catch (error) {
@@ -186,6 +235,43 @@ bot.onText(/\/linkwallet (.+)/, async (msg, match) => {
     await bot.sendMessage(
       msg.chat.id,
       '❌ An error occurred while linking your wallet. Please try again.',
+      { reply_to_message_id: msg.message_id }
+    );
+  }
+});
+
+// Handle /wallets command
+bot.onText(/\/wallets/, async (msg) => {
+  try {
+    const wallets = await getWalletAddresses(msg.from.id);
+    
+    if (wallets.length === 0) {
+      await bot.sendMessage(
+        msg.chat.id,
+        '❌ You have no linked wallets. Use /linkwallet to add one.',
+        { reply_to_message_id: msg.message_id }
+      );
+      return;
+    }
+
+    let message = '📋 Your Linked Wallets:\n\n';
+    wallets.forEach(wallet => {
+      message += `Network: ${wallet.network}\n` +
+                `Type: ${wallet.type}\n` +
+                `Address: ${wallet.address}\n` +
+                `Default: ${wallet.isDefault ? 'Yes' : 'No'}\n\n`;
+    });
+
+    await bot.sendMessage(
+      msg.chat.id,
+      message,
+      { reply_to_message_id: msg.message_id }
+    );
+  } catch (error) {
+    console.error('Error listing wallets:', error);
+    await bot.sendMessage(
+      msg.chat.id,
+      '❌ An error occurred while fetching your wallets. Please try again.',
       { reply_to_message_id: msg.message_id }
     );
   }
@@ -205,10 +291,11 @@ bot.onText(/\/claim/, async (msg) => {
       return;
     }
     
-    if (!user.walletAddress) {
+    const wallets = await getWalletAddresses(msg.from.id);
+    if (wallets.length === 0) {
       await bot.sendMessage(
         msg.chat.id,
-        '❌ You need to link a Lightning wallet first using /linkwallet <address>.',
+        '❌ You need to link a wallet first using /linkwallet <network> <address>.',
         { reply_to_message_id: msg.message_id }
       );
       return;
@@ -223,40 +310,20 @@ bot.onText(/\/claim/, async (msg) => {
       );
       return;
     }
-    
-    // Create a charge using OpenNode
-    try {
-      const charge = await opennode.createCharge({
-        amount: amountToClaim,
-        currency: 'BTC', // Use BTC for satoshis
-        description: `SatChat Reward Claim for user ${msg.from.id}`,
-        customer_email: '', // Optional, can be added if needed
-        callback_url: process.env.WEBHOOK_URL || 'YOUR_WEBHOOK_URL_FOR_PAYMENT_CONFIRMATION',
-        success_url: '', // Optional
-        auto_settle: true // Automatically settle to user's wallet if possible
-      });
-      
-      if (charge && charge.id) {
-        // Log the charge attempt
-        await logDonation(msg.from.id, amountToClaim, charge.id, 'Reward Claim');
-        // Temporarily reset balance (will be finalized on webhook confirmation)
-    await resetUserBalance(msg.from.id);
-        await bot.sendMessage(
-          msg.chat.id,
-          `✅ Claim request for ${amountToClaim} sats has been submitted! Funds will be sent to your Lightning wallet shortly. Invoice ID: ${charge.id}`,
-          { reply_to_message_id: msg.message_id }
-        );
-      } else {
-        throw new Error('Failed to create charge');
-      }
-    } catch (paymentError) {
-      console.error('Error creating OpenNode charge:', paymentError);
+
+    // Create inline keyboard for network selection
+    const keyboard = {
+      inline_keyboard: wallets.map(wallet => [{
+        text: `${wallet.network.toUpperCase()} (${wallet.type})`,
+        callback_data: `claim_${wallet.network}_${wallet.type}`
+      }])
+    };
+
     await bot.sendMessage(
       msg.chat.id,
-        '❌ An error occurred while processing your claim. Please try again later.',
-      { reply_to_message_id: msg.message_id }
+      `💰 Choose a network to claim your ${amountToClaim} sats:`,
+      { reply_to_message_id: msg.message_id, reply_markup: keyboard }
     );
-    }
   } catch (error) {
     console.error('Error claiming rewards:', error);
     await bot.sendMessage(
@@ -290,56 +357,23 @@ bot.onText(/\/pin/, async (msg) => {
       return;
     }
     
-    // Generate a unique invoice ID
-    const invoiceId = `INV-${Date.now()}-${msg.from.id}`;
-    const cost = config.pinningCost;
-    
-    // Log the donation for pinning
-    await logDonation(msg.from.id, cost, invoiceId, 'Message Pinning', msg.reply_to_message.message_id, msg.chat.id);
-    
-    // Record the pinning request with pending status
-    const expiryTime = new Date();
-    expiryTime.setHours(expiryTime.getHours() + config.pinningDuration);
-    await addPinnedMessage(msg.reply_to_message.message_id, msg.chat.id, msg.from.id, cost, expiryTime, invoiceId);
-    
-    // Create a charge using OpenNode for pinning cost
-    try {
-      const charge = await opennode.createCharge({
-        amount: cost,
-        currency: 'BTC', // Use BTC for satoshis
-        description: `SatChat Message Pinning for message ${msg.reply_to_message.message_id}`,
-        customer_email: '', // Optional
-        callback_url: process.env.WEBHOOK_URL || 'YOUR_WEBHOOK_URL_FOR_PAYMENT_CONFIRMATION',
-        success_url: '', // Optional
-        auto_settle: false // Manual settlement for pinning
-      });
-      
-      if (charge && charge.id) {
-        // Update invoiceId with OpenNode charge ID
-        await pool.query('UPDATE pinnedMessages SET invoiceId = ? WHERE invoiceId = ?', [charge.id, invoiceId]);
-        await pool.query('UPDATE donations SET invoiceId = ? WHERE invoiceId = ?', [charge.id, invoiceId]);
-        await bot.sendMessage(
-          msg.chat.id,
-          `📌 To pin this message for ${config.pinningDuration} hours, you need to pay ${cost} sats.
+    // Create inline keyboard for payment network selection
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '₿ Bitcoin Mainnet', callback_data: 'pin_btc' }
+        ],
+        [
+          { text: '🟡 exSat Network', callback_data: 'pin_exsat' }
+        ]
+      ]
+    };
 
-Invoice ID: ${charge.id}
-
-Please send ${cost} sats using the following Lightning invoice: ${charge.lightning_invoice.payreq}
-
-Once payment is confirmed, the message will be pinned.`,
-          { reply_to_message_id: msg.message_id }
-        );
-      } else {
-        throw new Error('Failed to create charge for pinning');
-      }
-    } catch (paymentError) {
-      console.error('Error creating OpenNode charge for pinning:', paymentError);
     await bot.sendMessage(
       msg.chat.id,
-        '❌ An error occurred while generating the payment request for pinning. Please try again.',
-      { reply_to_message_id: msg.message_id }
+      `📌 Choose your preferred payment network to pin this message for ${config.pinningDuration} hours (${config.pinningCost} sats):`,
+      { reply_to_message_id: msg.message_id, reply_markup: keyboard }
     );
-    }
   } catch (error) {
     console.error('Error handling pin request:', error);
     await bot.sendMessage(
@@ -347,6 +381,144 @@ Once payment is confirmed, the message will be pinned.`,
       '❌ An error occurred while processing your pin request. Please try again.',
       { reply_to_message_id: msg.message_id }
     );
+  }
+});
+
+// Handle payment network selection
+bot.on('callback_query', async (query) => {
+  try {
+    const [action, network, type] = query.data.split('_');
+    
+    if (action === 'claim') {
+      const msg = query.message;
+      const user = await getUser(query.from.id);
+      const amountToClaim = user.balance;
+      
+      // Get the wallet address for the selected network
+      const wallet = await getDefaultWalletAddress(query.from.id, network);
+      if (!wallet) {
+        await bot.answerCallbackQuery(query.id, {
+          text: '❌ Wallet not found. Please link a wallet first.',
+          show_alert: true
+        });
+        return;
+      }
+
+      // Create payment based on network
+      const payment = await paymentService.createPayment({
+        amount: amountToClaim,
+        description: `SatChat Reward Claim for user ${query.from.id}`,
+        network,
+        type,
+        callbackUrl: process.env.WEBHOOK_URL,
+        autoSettle: true
+      });
+
+      // Log the claim attempt
+      await logDonation(query.from.id, amountToClaim, payment.invoiceId, 'Reward Claim', null, null, network);
+      
+      // Reset user balance
+      await resetUserBalance(query.from.id);
+
+      // Send payment instructions
+      let paymentInstructions = '';
+      switch (network) {
+        case 'lightning':
+          paymentInstructions = `⚡️ To claim your ${amountToClaim} sats, please pay this Lightning invoice:\n\n${payment.paymentRequest}`;
+          break;
+        case 'btc':
+          paymentInstructions = `₿ To claim your ${amountToClaim} sats, please send to this Bitcoin address:\n\n${payment.paymentRequest}`;
+          break;
+        case 'exsat':
+          paymentInstructions = `🟡 To claim your ${amountToClaim} sats, please send to this exSat address:\n\n${payment.paymentRequest}`;
+          break;
+        case 'exsat-evm':
+          paymentInstructions = `🟡 To claim your ${amountToClaim} sats, please send to this exSat EVM address:\n\n${payment.paymentRequest}`;
+          break;
+      }
+
+      await bot.editMessageText(
+        paymentInstructions,
+        {
+          chat_id: msg.chat.id,
+          message_id: msg.message_id,
+          reply_markup: { inline_keyboard: [] }
+        }
+      );
+    } else if (action === 'pin') {
+      const msg = query.message;
+      const cost = config.pinningCost;
+      
+      // Create payment based on selected network
+      const payment = await paymentService.createPayment({
+        amount: cost,
+        description: `SatChat Message Pinning for message ${msg.reply_to_message.message_id}`,
+        network,
+        callbackUrl: process.env.WEBHOOK_URL,
+        autoSettle: false
+      });
+
+      // Record the pinning request
+      const expiryTime = new Date();
+      expiryTime.setHours(expiryTime.getHours() + config.pinningDuration);
+      await addPinnedMessage(
+        msg.reply_to_message.message_id,
+        msg.chat.id,
+        query.from.id,
+        cost,
+        expiryTime,
+        payment.invoiceId,
+        network
+      );
+
+      // Log the donation
+      await logDonation(
+        query.from.id,
+        cost,
+        payment.invoiceId,
+        'Message Pinning',
+        msg.reply_to_message.message_id,
+        msg.chat.id,
+        network
+      );
+
+      // Send payment instructions
+      let paymentInstructions = '';
+      if (network === 'btc') {
+        paymentInstructions = `📌 To pin this message for ${config.pinningDuration} hours, you need to pay ${cost} sats using Bitcoin.
+
+Invoice ID: ${payment.invoiceId}
+
+Please send exactly ${cost} sats to this Bitcoin address:
+${payment.paymentRequest}
+
+Once payment is confirmed, the message will be pinned.`;
+      } else if (network === 'exsat') {
+        paymentInstructions = `📌 To pin this message for ${config.pinningDuration} hours, you need to pay ${cost} sats using exSat.
+
+Invoice ID: ${payment.invoiceId}
+
+Please send exactly ${cost} sats using the following payment request:
+${payment.paymentRequest}
+
+Once payment is confirmed, the message will be pinned.`;
+      }
+
+      await bot.editMessageText(
+        paymentInstructions,
+        {
+          chat_id: msg.chat.id,
+          message_id: msg.message_id,
+          reply_markup: { inline_keyboard: [] }
+        }
+      );
+    }
+  } catch (error) {
+    console.error('Error handling callback query:', error);
+    await bot.answerCallbackQuery(query.id, {
+      text: '❌ An error occurred. Please try again.',
+      show_alert: true
+    });
   }
 });
 
@@ -532,7 +704,14 @@ bot.onText(/\/help/, async (msg) => {
 <b>📚 SatChat Bot Help</b>
 
 <b>User Commands:</b>
-/linkwallet <address> - Link your Lightning wallet
+/linkwallet <network> <address> - Link a wallet address
+Supported networks:
+• lightning - Lightning Network address (starts with ln)
+• btc - Bitcoin address
+• exsat - exSat native address
+• exsat-evm - exSat EVM address
+
+/wallets - List your linked wallets
 /claim - Claim your earned satoshis to your wallet
 /pin - Reply to a message with this command to pin it (costs ${config.pinningCost} sats)
 /balance - Check your current balance
@@ -580,45 +759,44 @@ async function checkExpiredPins() {
 // Check for expired pins every hour
 setInterval(checkExpiredPins, 60 * 60 * 1000);
 
-// Webhook endpoint for OpenNode payment confirmation (requires express or similar setup)
-// Note: This is a placeholder; actual implementation requires a server setup
+// Webhook endpoint for payment confirmation
 const app = express();
 app.use(express.json());
 
 app.post('/webhook/payment', async (req, res) => {
   try {
-    const { id, status, type } = req.body;
-    if (type === 'charge') {
-      console.log(`Received payment update for charge ${id}: ${status}`);
-      if (status === 'paid') {
+    const { invoiceId, network } = req.body;
+    
+    // Verify payment status
+    const paymentStatus = await paymentService.verifyPayment(invoiceId, network);
+    
+    if (paymentStatus.paid) {
     // Update donation status
-        await updateDonationStatus(id, 'completed');
+      await updateDonationStatus(invoiceId, 'completed');
+      
         // Check if it's for pinning
-        const [pinRows] = await pool.query('SELECT * FROM pinnedMessages WHERE invoiceId = ?', [id]);
+      const [pinRows] = await pool.query('SELECT * FROM pinnedMessages WHERE invoiceId = ?', [invoiceId]);
       if (pinRows.length > 0) {
         const pin = pinRows[0];
-          await updatePinPaymentStatus(id, 'completed');
+        await updatePinPaymentStatus(invoiceId, 'completed');
         await bot.pinChatMessage(pin.chatId, pin.messageId);
-          console.log(`Message ${pin.messageId} pinned after payment confirmation for invoice ${id}`);
+        console.log(`Message ${pin.messageId} pinned after payment confirmation for invoice ${invoiceId}`);
           await bot.sendMessage(pin.chatId, `📌 Message has been pinned successfully for ${config.pinningDuration} hours!`);
-        } else {
-          // Assume it's a claim if not a pin
-          console.log(`Claim payment confirmed for invoice ${id}`);
       }
-      } else if (status === 'failed' || status === 'expired') {
-        await updateDonationStatus(id, 'failed');
-        await updatePinPaymentStatus(id, 'failed');
-        console.log(`Payment failed or expired for invoice ${id}`);
+    } else if (paymentStatus.status === 'failed') {
+      await updateDonationStatus(invoiceId, 'failed');
+      await updatePinPaymentStatus(invoiceId, 'failed');
+      console.log(`Payment failed for invoice ${invoiceId}`);
       }
-    }
-    res.status(200).send('Webhook received');
+    
+    res.status(200).send('Webhook processed');
   } catch (error) {
     console.error('Error processing webhook:', error);
     res.status(500).send('Error processing webhook');
   }
 });
 
-// Start the webhook server (adjust port as needed)
+// Start the webhook server
 const webhookPort = process.env.WEBHOOK_PORT || 3000;
 app.listen(webhookPort, () => {
   console.log(`Webhook server running on port ${webhookPort}`);

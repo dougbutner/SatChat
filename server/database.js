@@ -27,18 +27,33 @@ async function initializeDatabase() {
     // Create users table
     await connection.query(`
       CREATE TABLE IF NOT EXISTS users (
-        id BIGINT PRIMARY KEY AUTO_INCREMENT,
-        telegramId BIGINT UNIQUE,
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        telegramId BIGINT UNIQUE NOT NULL,
         username VARCHAR(255),
         firstName VARCHAR(255),
         lastName VARCHAR(255),
-        balance BIGINT DEFAULT 0,
-        totalEarned BIGINT DEFAULT 0,
-        messageCount BIGINT DEFAULT 0,
-        walletAddress TEXT,
+        balance INT DEFAULT 0,
+        totalEarned INT DEFAULT 0,
+        messageCount INT DEFAULT 0,
+        lastActive TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        lastActive TIMESTAMP,
-        walletLinkedAt TIMESTAMP
+        updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      )
+    `);
+    
+    // Create wallet_addresses table
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS wallet_addresses (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        userId INT NOT NULL,
+        network VARCHAR(50) NOT NULL,
+        address VARCHAR(255) NOT NULL,
+        type VARCHAR(50) NOT NULL,
+        isDefault BOOLEAN DEFAULT false,
+        createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        FOREIGN KEY (userId) REFERENCES users(id),
+        UNIQUE KEY unique_wallet (userId, network, type)
       )
     `);
     
@@ -75,6 +90,7 @@ async function initializeDatabase() {
         userId BIGINT,
         cost BIGINT,
         invoiceId VARCHAR(255),
+        paymentNetwork ENUM('lightning', 'exsat', 'btc') DEFAULT 'lightning',
         paymentStatus ENUM('pending', 'completed', 'failed') DEFAULT 'pending',
         pinnedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         expiresAt TIMESTAMP
@@ -88,6 +104,7 @@ async function initializeDatabase() {
         userId BIGINT,
         amount BIGINT,
         invoiceId VARCHAR(255) UNIQUE,
+        paymentNetwork ENUM('lightning', 'exsat', 'btc') DEFAULT 'lightning',
         paymentStatus ENUM('pending', 'completed', 'failed') DEFAULT 'pending',
         purpose VARCHAR(255),
         messageId BIGINT NULL,
@@ -123,6 +140,7 @@ async function initializeDatabase() {
     connection.release();
   } catch (error) {
     console.error('Error initializing database:', error);
+    throw error;
   }
 }
 
@@ -174,10 +192,10 @@ async function saveDailyStats(stats) {
 }
 
 // Pinned messages functions
-async function addPinnedMessage(messageId, chatId, userId, cost, expiresAt, invoiceId) {
+async function addPinnedMessage(messageId, chatId, userId, cost, expiresAt, invoiceId, paymentNetwork = 'lightning') {
   await pool.query(
-    'INSERT INTO pinnedMessages (messageId, chatId, userId, cost, expiresAt, invoiceId, paymentStatus) VALUES (?, ?, ?, ?, ?, ?, "pending")',
-    [messageId, chatId, userId, cost, expiresAt, invoiceId]
+    'INSERT INTO pinnedMessages (messageId, chatId, userId, cost, expiresAt, invoiceId, paymentNetwork, paymentStatus) VALUES (?, ?, ?, ?, ?, ?, ?, "pending")',
+    [messageId, chatId, userId, cost, expiresAt, invoiceId, paymentNetwork]
   );
 }
 
@@ -198,10 +216,10 @@ async function removePin(messageId, chatId) {
 }
 
 // Donation functions
-async function logDonation(userId, amount, invoiceId, purpose, messageId = null, chatId = null) {
+async function logDonation(userId, amount, invoiceId, purpose, messageId = null, chatId = null, paymentNetwork = 'lightning') {
   await pool.query(
-    'INSERT INTO donations (userId, amount, invoiceId, paymentStatus, purpose, messageId, chatId, createdAt) VALUES (?, ?, ?, "pending", ?, ?, ?, NOW())',
-    [userId, amount, invoiceId, purpose, messageId, chatId]
+    'INSERT INTO donations (userId, amount, invoiceId, paymentNetwork, purpose, messageId, chatId) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [userId, amount, invoiceId, paymentNetwork, purpose, messageId, chatId]
   );
 }
 
@@ -233,6 +251,72 @@ async function getRewardKeywords() {
   return rows;
 }
 
+// Update wallet functions
+async function addWalletAddress(telegramId, network, address, type, isDefault = false) {
+  try {
+    const [userRows] = await pool.query('SELECT id FROM users WHERE telegramId = ?', [telegramId]);
+    if (userRows.length === 0) {
+      throw new Error('User not found');
+    }
+    const userId = userRows[0].id;
+
+    // If this is set as default, unset any existing default for this network
+    if (isDefault) {
+      await pool.query(
+        'UPDATE wallet_addresses SET isDefault = false WHERE userId = ? AND network = ?',
+        [userId, network]
+      );
+    }
+
+    // Insert or update the wallet address
+    await pool.query(`
+      INSERT INTO wallet_addresses (userId, network, address, type, isDefault)
+      VALUES (?, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE
+      address = VALUES(address),
+      isDefault = VALUES(isDefault),
+      updatedAt = CURRENT_TIMESTAMP
+    `, [userId, network, address, type, isDefault]);
+
+    return true;
+  } catch (error) {
+    console.error('Error adding wallet address:', error);
+    throw error;
+  }
+}
+
+async function getWalletAddresses(telegramId) {
+  try {
+    const [rows] = await pool.query(`
+      SELECT wa.* 
+      FROM wallet_addresses wa
+      JOIN users u ON wa.userId = u.id
+      WHERE u.telegramId = ?
+      ORDER BY wa.isDefault DESC, wa.network, wa.type
+    `, [telegramId]);
+    return rows;
+  } catch (error) {
+    console.error('Error getting wallet addresses:', error);
+    throw error;
+  }
+}
+
+async function getDefaultWalletAddress(telegramId, network) {
+  try {
+    const [rows] = await pool.query(`
+      SELECT wa.* 
+      FROM wallet_addresses wa
+      JOIN users u ON wa.userId = u.id
+      WHERE u.telegramId = ? AND wa.network = ? AND wa.isDefault = true
+      LIMIT 1
+    `, [telegramId, network]);
+    return rows[0] || null;
+  } catch (error) {
+    console.error('Error getting default wallet address:', error);
+    throw error;
+  }
+}
+
 export {
   initializeDatabase,
   getUser,
@@ -251,5 +335,8 @@ export {
   getDonationStats,
   addRewardKeyword, 
   getRewardKeywords,
+  addWalletAddress,
+  getWalletAddresses,
+  getDefaultWalletAddress,
   pool
 };

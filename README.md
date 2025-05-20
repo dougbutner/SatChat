@@ -11,6 +11,29 @@ SatChat is a modern web application that integrates cryptocurrency functionality
 - 🔐 Secure wallet connection
 - 👨‍💼 Admin panel for management
 
+## Bot Commands
+
+### User Commands
+- `/linkwallet <address>` - Link your Lightning wallet address to receive rewards
+- `/claim` - Claim your earned satoshis and transfer them to your linked wallet
+- `/balance` - Check your current satoshi balance
+- `/pin` - Reply to a message to pin it (costs satoshis)
+- `/help` - Display all available commands and their usage
+
+### Admin Commands
+- `/setreward <amount>` - Set the reward amount per message (1-100 sats)
+- `/setcap <amount>` - Set the daily reward cap
+- `/setpin <cost> <hours>` - Set the cost and duration for pinning messages
+- `/addkeyword <word> <multiplier>` - Add a keyword that boosts rewards with a multiplier
+
+### Features
+- Earn satoshis for sending messages in the chat
+- Keywords can multiply your rewards
+- Pin important messages for a fee
+- Daily reward caps to manage distribution
+- Automatic Bitcoin facts shared in chat
+- Secure Lightning Network payments via OpenNode
+
 ## Tech Stack
 
 ### Frontend
@@ -41,15 +64,15 @@ SatChat is a modern web application that integrates cryptocurrency functionality
 ## Installation
 
 1. Clone the repository:
-```bash
+   ```bash
 git clone https://github.com/yourusername/satchat.git
 cd satchat
-```
+   ```
 
 2. Install frontend dependencies:
-```bash
-npm install
-```
+   ```bash
+   npm install
+   ```
 
 3. Install Python dependencies:
 ```bash
@@ -58,8 +81,8 @@ pip install -r requirements.txt
 
 4. Create a `.env` file in the root directory with the following variables:
 ```env
-TELEGRAM_BOT_TOKEN=your_telegram_bot_token
-OPENNODE_API_KEY=your_opennode_api_key
+     TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+     OPENNODE_API_KEY=your_opennode_api_key
 DB_HOST=localhost
 DB_USER=your_db_user
 DB_PASSWORD=your_db_password

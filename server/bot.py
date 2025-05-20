@@ -42,12 +42,10 @@ async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     db_user = await db.get_user(user.id)
     
     if db_user:
-        wallet_status = "Linked" if db_user["walletAddress"] else "Not linked"
         await update.message.reply_text(
             f'Your current balance is {db_user["balance"]} sats.\n'
             f'Total earned: {db_user["totalEarned"]} sats\n'
-            f'Messages sent: {db_user["messageCount"]}\n'
-            f'Wallet status: {wallet_status}'
+            f'Messages sent: {db_user["messageCount"]}'
         )
     else:
         await update.message.reply_text('Please use /start to create your account first.')
