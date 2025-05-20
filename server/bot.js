@@ -87,6 +87,48 @@ function resetDailyStats() {
 // Set up a daily reset check
 setInterval(resetDailyStats, 60 * 60 * 1000); // Check every hour
 
+// Message formatting utilities
+const messageStyles = {
+  emojis: {
+    success: '✅',
+    error: '❌',
+    warning: '⚠️',
+    info: 'ℹ️',
+    money: '💰',
+    wallet: '👛',
+    pin: '📌',
+    help: '📚',
+    network: '🔗',
+    bitcoin: '₿',
+    lightning: '⚡',
+    settings: '⚙️',
+    stats: '📊',
+    time: '⏰',
+    check: '✓',
+    cross: '✗'
+  },
+  
+  formatBalance: (amount) => `${messageStyles.emojis.money} ${amount} sats`,
+  formatSuccess: (text) => `${messageStyles.emojis.success} ${text}`,
+  formatError: (text) => `${messageStyles.emojis.error} ${text}`,
+  formatWarning: (text) => `${messageStyles.emojis.warning} ${text}`,
+  formatInfo: (text) => `${messageStyles.emojis.info} ${text}`,
+  
+  formatSection: (title, content) => `*${title}*\n${content}`,
+  formatListItem: (text) => `• ${text}`,
+  formatCode: (text) => `\`${text}\``,
+  
+  formatNetwork: (network) => {
+    const networkEmojis = {
+      'lightning': messageStyles.emojis.lightning,
+      'btc': messageStyles.emojis.bitcoin,
+      'exsat': messageStyles.emojis.wallet,
+      'exsat-evm': messageStyles.emojis.wallet
+    };
+    return `${networkEmojis[network] || ''} ${network}`;
+  }
+};
+
 // Handle new messages
 bot.on('message', async (msg) => {
   try {
@@ -103,7 +145,7 @@ bot.on('message', async (msg) => {
       // Notify the group that daily limit is reached
       await bot.sendMessage(
         msg.chat.id,
-        '⚠️ Daily reward cap of ' + config.dailyRewardCap + ' sats has been reached. No more rewards will be distributed today.'
+        messageStyles.formatWarning(`Daily reward cap of ${config.dailyRewardCap} sats has been reached. No more rewards will be distributed today.`)
       );
       return;
     }
@@ -146,12 +188,20 @@ bot.on('message', async (msg) => {
     // Get Bitcoin fact
     const fact = getBitcoinFact();
     
-    // Occasionally share a Bitcoin fact (1 in 10 messages)
+    // Update reward message
+    await bot.sendMessage(
+      msg.chat.id,
+      `${messageStyles.formatSuccess(`Rewarded ${reward} sats for your message!`)}\n` +
+      `${messageStyles.formatBalance(`New balance: ${user["balance"] + reward}`)}`,
+      { parse_mode: 'Markdown' }
+    );
+    
+    // Update Bitcoin fact message
     if (Math.random() < 0.1) {
       await bot.sendMessage(
         msg.chat.id,
-        `<b>🔶 Bitcoin Fact:</b> ${fact}`,
-        { parse_mode: 'HTML' }
+        `${messageStyles.emojis.bitcoin} *Bitcoin Fact:*\n${fact}`,
+        { parse_mode: 'Markdown' }
       );
     }
   } catch (error) {
@@ -162,37 +212,34 @@ bot.on('message', async (msg) => {
 // Handle /linkwallet command
 bot.onText(/\/linkwallet(?:\s+(.+))?/, async (msg, match) => {
   try {
-    // If no arguments provided, show format help
     if (!match[1]) {
-      await bot.sendMessage(
-        msg.chat.id,
-        `*📝 Wallet Linking Guide*
+      const helpText = `
+${messageStyles.emojis.wallet} *Wallet Linking Guide*
 
-Please use the following format:
-/linkwallet <network> <address>
+${messageStyles.formatSection('Format', messageStyles.formatCode('/linkwallet <network> <address>'))}
 
-*Supported Networks and Formats:*
-• lightning - Lightning Network address
+${messageStyles.formatSection('Supported Networks', `
+${messageStyles.formatListItem(`${messageStyles.emojis.lightning} Lightning Network
   Format: ln... (starts with ln)
-  Example: lnbc1p...
+  Example: lnbc1p...`)}
 
-• btc - Bitcoin address
+${messageStyles.formatListItem(`${messageStyles.emojis.bitcoin} Bitcoin
   Supported formats:
   - Legacy (P2PKH): Starts with 1
   - SegWit (P2SH): Starts with 3
   - Native SegWit (Bech32): Starts with bc1
   - Taproot (Bech32m): Starts with bc1p
-  Example: 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa
+  Example: 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa`)}
 
-• exsat - exSat native address (EOSIO format)
+${messageStyles.formatListItem(`${messageStyles.emojis.wallet} exSat Native
   Format: 1-12 characters, only a-z, 1-5
-  Example: ice
+  Example: ice`)}
 
-• exsat-evm - exSat EVM address
+${messageStyles.formatListItem(`${messageStyles.emojis.wallet} exSat EVM
   Format: 0x followed by 40 hex characters
-  Example: 0x742d35Cc6634C0532925a3b844Bc454e4438f44e`,
-        { parse_mode: 'Markdown' }
-      );
+  Example: 0x742d35Cc6634C0532925a3b844Bc454e4438f44e`)}`)}`;
+      
+      await bot.sendMessage(msg.chat.id, helpText, { parse_mode: 'Markdown' });
       return;
     }
 
@@ -280,20 +327,22 @@ Please use the following format:
     // Add the wallet address
     await addWalletAddress(msg.from.id, network.toLowerCase(), address, type, true);
     
+    // Update success message
     await bot.sendMessage(
       msg.chat.id,
-      `✅ Your ${network} wallet has been successfully linked!\n\n` +
-      `Network: ${network}\n` +
-      `Type: ${type}\n` +
-      `Address: ${address}\n\n` +
-      'You can now claim your rewards using /claim.',
-      { reply_to_message_id: msg.message_id }
+      `${messageStyles.formatSuccess('Wallet linked successfully!')}\n\n` +
+      `${messageStyles.formatSection('Details', `
+${messageStyles.formatListItem(`Network: ${messageStyles.formatNetwork(network)}`)}
+${messageStyles.formatListItem(`Type: ${type}`)}
+${messageStyles.formatListItem(`Address: ${messageStyles.formatCode(address)}`)}`)}\n\n` +
+      `Use /claim to withdraw your rewards.`,
+      { parse_mode: 'Markdown', reply_to_message_id: msg.message_id }
     );
   } catch (error) {
     console.error('Error linking wallet:', error);
     await bot.sendMessage(
       msg.chat.id,
-      '❌ An error occurred while linking your wallet. Please try again.',
+      messageStyles.formatError('An error occurred while linking your wallet. Please try again.'),
       { reply_to_message_id: msg.message_id }
     );
   }
@@ -307,30 +356,29 @@ bot.onText(/\/wallets/, async (msg) => {
     if (wallets.length === 0) {
       await bot.sendMessage(
         msg.chat.id,
-        '❌ You have no linked wallets. Use /linkwallet to add one.',
+        messageStyles.formatError('You have no linked wallets. Use /linkwallet to add one.'),
         { reply_to_message_id: msg.message_id }
       );
       return;
     }
 
-    let message = '📋 Your Linked Wallets:\n\n';
-    wallets.forEach(wallet => {
-      message += `Network: ${wallet.network}\n` +
-                `Type: ${wallet.type}\n` +
-                `Address: ${wallet.address}\n` +
-                `Default: ${wallet.isDefault ? 'Yes' : 'No'}\n\n`;
-    });
+    const walletList = wallets.map(wallet => 
+      `${messageStyles.formatListItem(`${messageStyles.formatNetwork(wallet.network)}`)}
+${messageStyles.formatListItem(`Type: ${wallet.type}`)}
+${messageStyles.formatListItem(`Address: ${messageStyles.formatCode(wallet.address)}`)}
+${messageStyles.formatListItem(`Default: ${wallet.isDefault ? messageStyles.emojis.check : messageStyles.emojis.cross}`)}`
+    ).join('\n\n');
 
     await bot.sendMessage(
       msg.chat.id,
-      message,
-      { reply_to_message_id: msg.message_id }
+      `${messageStyles.emojis.wallet} *Your Linked Wallets*\n\n${walletList}`,
+      { parse_mode: 'Markdown', reply_to_message_id: msg.message_id }
     );
   } catch (error) {
     console.error('Error listing wallets:', error);
     await bot.sendMessage(
       msg.chat.id,
-      '❌ An error occurred while fetching your wallets. Please try again.',
+      messageStyles.formatError('An error occurred while fetching your wallets. Please try again.'),
       { reply_to_message_id: msg.message_id }
     );
   }
@@ -344,48 +392,35 @@ bot.onText(/\/claim/, async (msg) => {
     if (!user) {
       await bot.sendMessage(
         msg.chat.id,
-        '❌ You need to participate in the chat first to earn rewards.',
-        { reply_to_message_id: msg.message_id }
-      );
-      return;
-    }
-    
-    const wallets = await getWalletAddresses(msg.from.id);
-    if (wallets.length === 0) {
-      await bot.sendMessage(
-        msg.chat.id,
-        '❌ You need to link a wallet first using /linkwallet exsat <address>.',
-        { reply_to_message_id: msg.message_id }
-      );
-      return;
-    }
-    
-    const amountToClaim = user.balance;
-    if (amountToClaim <= 0) {
-      await bot.sendMessage(
-        msg.chat.id,
-        '❌ You have no balance to claim.',
+        messageStyles.formatError('You need to participate in the chat first to earn rewards.'),
         { reply_to_message_id: msg.message_id }
       );
       return;
     }
 
-    // Get the default exSat wallet
+    if (user.balance < 1000) {
+      await bot.sendMessage(
+        msg.chat.id,
+        messageStyles.formatWarning(`Minimum withdrawal amount is 1000 sats. Your current balance is ${user.balance} sats.`),
+        { reply_to_message_id: msg.message_id }
+      );
+      return;
+    }
+
     const wallet = await getDefaultWalletAddress(msg.from.id, 'exsat');
     if (!wallet) {
       await bot.sendMessage(
         msg.chat.id,
-        '❌ Please set a default exSat wallet using /linkwallet exsat <address>.',
+        messageStyles.formatError('Please link a wallet first using /linkwallet.'),
         { reply_to_message_id: msg.message_id }
       );
       return;
     }
 
-    // Generate unique claim ID
     const claimId = `CLAIM_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const amountToClaim = user.balance;
 
     try {
-      // Send payment through Vaulta
       const result = await paymentService.sendExSatPayment(
         wallet.address,
         amountToClaim,
@@ -393,10 +428,7 @@ bot.onText(/\/claim/, async (msg) => {
       );
 
       if (result.success) {
-        // Reset user balance
         await resetUserBalance(msg.from.id);
-
-        // Log the claim
         await logDonation(
           msg.from.id,
           amountToClaim,
@@ -407,13 +439,18 @@ bot.onText(/\/claim/, async (msg) => {
           'exsat'
         );
 
+        const claimDetails = [
+          messageStyles.formatSuccess('Successfully claimed your rewards!'),
+          messageStyles.formatSection('Transaction Details', `
+${messageStyles.formatListItem(`Amount: ${messageStyles.formatBalance(amountToClaim)}`)}
+${messageStyles.formatListItem(`To: ${messageStyles.formatCode(wallet.address)}`)}
+${messageStyles.formatListItem(`TX ID: ${messageStyles.formatCode(result.txId)}`)}`)
+        ].join('\n\n');
+
         await bot.sendMessage(
           msg.chat.id,
-          `✅ Successfully claimed ${amountToClaim} sats!\n\n` +
-          `Transaction ID: ${result.txId}\n` +
-          `Amount: ${amountToClaim} sats\n` +
-          `To: ${wallet.address}`,
-          { reply_to_message_id: msg.message_id }
+          claimDetails,
+          { parse_mode: 'Markdown', reply_to_message_id: msg.message_id }
         );
       } else {
         throw new Error('Payment failed');
@@ -422,7 +459,7 @@ bot.onText(/\/claim/, async (msg) => {
       console.error('Error processing claim:', error);
       await bot.sendMessage(
         msg.chat.id,
-        '❌ An error occurred while processing your claim. Please try again.',
+        messageStyles.formatError('An error occurred while processing your claim. Please try again.'),
         { reply_to_message_id: msg.message_id }
       );
     }
@@ -430,7 +467,7 @@ bot.onText(/\/claim/, async (msg) => {
     console.error('Error handling claim:', error);
     await bot.sendMessage(
       msg.chat.id,
-      '❌ An error occurred. Please try again.',
+      messageStyles.formatError('An error occurred. Please try again.'),
       { reply_to_message_id: msg.message_id }
     );
   }
@@ -442,7 +479,7 @@ bot.onText(/\/pin/, async (msg) => {
     if (!msg.reply_to_message) {
       await bot.sendMessage(
         msg.chat.id,
-        '❌ You need to reply to a message you want to pin.',
+        messageStyles.formatError('You need to reply to a message you want to pin.'),
         { reply_to_message_id: msg.message_id }
       );
       return;
@@ -453,25 +490,19 @@ bot.onText(/\/pin/, async (msg) => {
     if (!user) {
       await bot.sendMessage(
         msg.chat.id,
-        '❌ You need to participate in the chat first before you can pin messages.',
+        messageStyles.formatError('You need to participate in the chat first before you can pin messages.'),
         { reply_to_message_id: msg.message_id }
       );
       return;
     }
 
-    // Generate unique invoice ID
     const invoiceId = `PIN_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-
-    // Create inline keyboard with verify payment button
     const keyboard = {
       inline_keyboard: [
-        [
-          { text: '✅ Verify Payment', callback_data: `verify_${invoiceId}` }
-        ]
+        [{ text: `${messageStyles.emojis.check} Verify Payment`, callback_data: `verify_${invoiceId}` }]
       ]
     };
 
-    // Record the pinning request
     const expiryTime = new Date();
     expiryTime.setHours(expiryTime.getHours() + config.pinningDuration);
     await addPinnedMessage(
@@ -484,7 +515,6 @@ bot.onText(/\/pin/, async (msg) => {
       'exsat'
     );
 
-    // Log the donation
     await logDonation(
       msg.from.id,
       config.pinningCost,
@@ -495,25 +525,23 @@ bot.onText(/\/pin/, async (msg) => {
       'exsat'
     );
 
-    // Send payment instructions
-    const paymentInstructions = `📌 To pin this message for ${config.pinningDuration} hours, you need to pay ${config.pinningCost} sats using exSat.
-
-Invoice ID: ${invoiceId}
-
-Please send exactly ${config.pinningCost} sats to this exSat address:
-${process.env.BOT_EXSAT_ADDRESS}
-
-Important: You MUST include the Invoice ID in the memo field:
-${invoiceId}
-
-The amount will be converted to ${(config.pinningCost * 0.00000001).toFixed(8)} A tokens on the Vaulta network.
-
-Once you've sent the payment, click the "Verify Payment" button below.`;
+    const pinInstructions = [
+      `${messageStyles.emojis.pin} *Pin Message Instructions*`,
+      messageStyles.formatSection('Cost', `${messageStyles.formatBalance(config.pinningCost)} for ${config.pinningDuration} hours`),
+      messageStyles.formatSection('Payment Details', `
+${messageStyles.formatListItem(`Invoice ID: ${messageStyles.formatCode(invoiceId)}`)}
+${messageStyles.formatListItem(`Amount: ${messageStyles.formatBalance(config.pinningCost)}`)}
+${messageStyles.formatListItem(`Address: ${messageStyles.formatCode(process.env.BOT_EXSAT_ADDRESS)}`)}
+${messageStyles.formatListItem(`Memo: ${messageStyles.formatCode(invoiceId)}`)}`),
+      messageStyles.formatInfo('The amount will be converted to A tokens on the Vaulta network.'),
+      messageStyles.formatInfo('Click the "Verify Payment" button below after sending.')
+    ].join('\n\n');
 
     await bot.sendMessage(
       msg.chat.id,
-      paymentInstructions,
+      pinInstructions,
       { 
+        parse_mode: 'Markdown',
         reply_to_message_id: msg.message_id,
         reply_markup: keyboard
       }
@@ -522,7 +550,7 @@ Once you've sent the payment, click the "Verify Payment" button below.`;
     console.error('Error handling pin request:', error);
     await bot.sendMessage(
       msg.chat.id,
-      '❌ An error occurred while processing your pin request. Please try again.',
+      messageStyles.formatError('An error occurred while processing your pin request. Please try again.'),
       { reply_to_message_id: msg.message_id }
     );
   }
@@ -531,114 +559,53 @@ Once you've sent the payment, click the "Verify Payment" button below.`;
 // Handle payment verification
 bot.on('callback_query', async (query) => {
   try {
-    const [action, invoiceId] = query.data.split('_');
-    
-    if (action === 'verify') {
-      const msg = query.message;
+    if (query.data.startsWith('verify_')) {
+      const invoiceId = query.data.replace('verify_', '');
+      const pin = await getPinnedMessage(invoiceId);
       
-      // Get the pinned message details
-      const [pinRows] = await pool.query('SELECT * FROM pinnedMessages WHERE invoiceId = ?', [invoiceId]);
-      if (pinRows.length === 0) {
+      if (!pin) {
         await bot.answerCallbackQuery(query.id, {
-          text: '❌ Invoice not found.',
+          text: messageStyles.formatError('Invalid pin request.'),
           show_alert: true
         });
         return;
       }
 
-      const pin = pinRows[0];
-      
-      // Check if already paid
-      if (pin.paymentStatus === 'completed') {
-        await bot.answerCallbackQuery(query.id, {
-          text: '✅ Payment already verified!',
-          show_alert: true
-        });
-        return;
-      }
-
-      // Verify payment on blockchain
-      const paymentVerified = await verifyExSatPayment(invoiceId, pin.cost);
+      const paymentVerified = await verifyPayment(invoiceId);
       
       if (paymentVerified) {
-        // Update payment status
         await updatePinPaymentStatus(invoiceId, 'completed');
         await updateDonationStatus(invoiceId, 'completed');
         
-        // Update bot balance
         const currentBalance = await getBotBalance('exsat');
         await updateBotBalance('exsat', currentBalance + pin.cost);
         
-        // Pin the message
         await bot.pinChatMessage(pin.chatId, pin.messageId);
         
         await bot.answerCallbackQuery(query.id, {
-          text: '✅ Payment verified! Message has been pinned.',
+          text: messageStyles.formatSuccess('Payment verified! Message has been pinned.'),
           show_alert: true
         });
         
         await bot.editMessageText(
-          '✅ Payment verified! Message has been pinned successfully.',
+          messageStyles.formatSuccess('Payment verified! Message has been pinned successfully.'),
           {
-            chat_id: msg.chat.id,
-            message_id: msg.message_id,
+            chat_id: query.message.chat.id,
+            message_id: query.message.message_id,
             reply_markup: { inline_keyboard: [] }
           }
         );
       } else {
         await bot.answerCallbackQuery(query.id, {
-          text: '❌ Payment not found. Please make sure you sent the correct amount with the Invoice ID in the memo.',
+          text: messageStyles.formatError('Payment not found. Please make sure you sent the correct amount with the Invoice ID in the memo.'),
           show_alert: true
         });
       }
-    } else if (action === 'claim') {
-      const msg = query.message;
-      const user = await getUser(query.from.id);
-      const amountToClaim = user.balance;
-      
-      // Get the wallet address for the selected network
-      const wallet = await getDefaultWalletAddress(query.from.id, 'exsat');
-      if (!wallet) {
-        await bot.answerCallbackQuery(query.id, {
-          text: '❌ Wallet not found. Please link a wallet first.',
-          show_alert: true
-        });
-        return;
-      }
-
-      // Create payment based on network
-      const payment = await paymentService.createPayment({
-        amount: amountToClaim,
-        description: `SatChat Reward Claim for user ${query.from.id}`,
-        network: 'exsat',
-        type: 'exsat',
-        callbackUrl: process.env.WEBHOOK_URL,
-        autoSettle: true
-      });
-
-      // Log the claim attempt
-      await logDonation(query.from.id, amountToClaim, payment.invoiceId, 'Reward Claim', null, null, 'exsat');
-      
-      // Reset user balance
-      await resetUserBalance(query.from.id);
-
-      // Send payment instructions
-      let paymentInstructions = '';
-      paymentInstructions = `🟡 To claim your ${amountToClaim} sats, please send to this exSat address:\n\n${payment.paymentRequest}`;
-
-      await bot.editMessageText(
-        paymentInstructions,
-        {
-          chat_id: msg.chat.id,
-          message_id: msg.message_id,
-          reply_markup: { inline_keyboard: [] }
-        }
-      );
     }
   } catch (error) {
     console.error('Error handling callback query:', error);
     await bot.answerCallbackQuery(query.id, {
-      text: '❌ An error occurred. Please try again.',
+      text: messageStyles.formatError('An error occurred. Please try again.'),
       show_alert: true
     });
   }
@@ -689,22 +656,28 @@ bot.onText(/\/balance/, async (msg) => {
     if (!user) {
       await bot.sendMessage(
         msg.chat.id,
-        '❌ You need to participate in the chat first to earn rewards.',
+        messageStyles.formatError('You need to participate in the chat first to earn rewards.'),
         { reply_to_message_id: msg.message_id }
       );
       return;
     }
     
+    const stats = [
+      messageStyles.formatBalance(`Current Balance: ${user.balance}`),
+      messageStyles.formatBalance(`Total Earned: ${user.totalEarned || 0}`),
+      messageStyles.formatInfo(`Messages Sent: ${user.messageCount || 0}`)
+    ].join('\n');
+    
     await bot.sendMessage(
       msg.chat.id,
-      `💰 Your current balance is ${user.balance} sats. Use /claim to withdraw to your exSat wallet.`,
-      { reply_to_message_id: msg.message_id }
+      `${messageStyles.emojis.stats} *Your Stats*\n\n${stats}\n\nUse /claim to withdraw to your exSat wallet.`,
+      { parse_mode: 'Markdown', reply_to_message_id: msg.message_id }
     );
   } catch (error) {
     console.error('Error checking balance:', error);
     await bot.sendMessage(
       msg.chat.id,
-      '❌ An error occurred while checking your balance. Please try again.',
+      messageStyles.formatError('An error occurred while checking your balance. Please try again.'),
       { reply_to_message_id: msg.message_id }
     );
   }
@@ -860,50 +833,33 @@ bot.onText(/\/addkeyword (\w+) (\d+\.?\d*)/, async (msg, match) => {
 bot.onText(/\/help/, async (msg) => {
   try {
     const helpText = `
-*📚 SatChat Bot Help*
+${messageStyles.emojis.help} *SatChat Bot Help*
 
-*User Commands:*
-/linkwallet <network> <address> - Link a wallet address
-Supported networks:
-• lightning - Lightning Network address (starts with ln)
-• btc - Bitcoin address (supports all formats: Legacy, SegWit, Native SegWit, Taproot)
-• exsat - exSat native address (Vaulta network account)
-• exsat-evm - exSat EVM address (Vaulta EVM network account)
+${messageStyles.formatSection('User Commands', `
+${messageStyles.formatListItem('/linkwallet <network> <address> - Link a wallet address')}
+${messageStyles.formatListItem('/claim - Claim your earned satoshis')}
+${messageStyles.formatListItem('/balance - Check your current balance')}
+${messageStyles.formatListItem('/pin - Pin a message (costs ${config.pinningCost} sats)')}
+${messageStyles.formatListItem('/wallets - List your linked wallets')}
+${messageStyles.formatListItem('/listchains - View supported networks')}`)}
 
-*Currently Active Network:*
-• exSat Native (Vaulta)
-  - All withdrawals are processed on exSat Native
-  - Format: 1-12 characters, only a-z, 1-5
-  Example: myexsatname
+${messageStyles.formatSection('Supported Networks', `
+${messageStyles.formatListItem(`${messageStyles.emojis.lightning} Lightning Network (ln...)`)}
+${messageStyles.formatListItem(`${messageStyles.emojis.bitcoin} Bitcoin (1..., 3..., bc1...)`)}
+${messageStyles.formatListItem(`${messageStyles.emojis.wallet} exSat Native (1-12 chars)`)}
+${messageStyles.formatListItem(`${messageStyles.emojis.wallet} exSat EVM (0x...)`)}`)}
 
-*Wallet Management:*
-/wallets - List your linked wallets
-/linkwallet - Link a new wallet address
-/listchains - View supported networks and their formats
+${messageStyles.formatSection('Current Settings', `
+${messageStyles.formatListItem(`Reward per message: ${config.rewardPerMessage} sats`)}
+${messageStyles.formatListItem(`Daily reward cap: ${config.dailyRewardCap} sats`)}
+${messageStyles.formatListItem(`Pinning cost: ${config.pinningCost} sats`)}
+${messageStyles.formatListItem(`Pinning duration: ${config.pinningDuration} hours`)}`)}
 
-*Rewards & Payments:*
-/claim - Claim your earned satoshis to your exSat wallet
-/pin - Reply to a message with this command to pin it (costs ${config.pinningCost} sats)
-/balance - Check your current balance
-
-*Admin Commands:*
-/setreward <amount> - Set reward per message (1-100 sats)
-/setcap <amount> - Set daily reward cap (min 1000 sats)
-/setpin <cost> <hours> - Set pinning cost and duration
-/addkeyword <word> <multiplier> - Add or update a reward-boosting keyword (1.0-10.0x)
-
-*Current Settings:*
-• Reward per message: ${config.rewardPerMessage} sats
-• Daily reward cap: ${config.dailyRewardCap} sats
-• Pinning cost: ${config.pinningCost} sats
-• Pinning duration: ${config.pinningDuration} hours
-
-*Payment Instructions:*
-• All withdrawals are processed on the exSat Native network
-• When pinning a message, you'll receive an invoice ID
-• Send the exact amount to the bot's exSat address
-• Include the invoice ID in the memo field
-• Click "Verify Payment" after sending
+${messageStyles.formatSection('Admin Commands', `
+${messageStyles.formatListItem('/setreward <amount> - Set reward per message')}
+${messageStyles.formatListItem('/setcap <amount> - Set daily reward cap')}
+${messageStyles.formatListItem('/setpin <cost> <hours> - Set pinning settings')}
+${messageStyles.formatListItem('/addkeyword <word> <multiplier> - Add reward keyword')}`)}
 
 Made with ❤️ for the Bitcoin 2025 Hackathon
 `;
@@ -1032,40 +988,136 @@ console.log('SatChat Bot is running...');
 // Handle /listchains command
 bot.onText(/\/listchains/, async (msg) => {
   try {
+    const chainsInfo = [
+      `${messageStyles.emojis.network} *Supported Networks for Stacking Sats*`,
+      messageStyles.formatSection('Lightning Network', `
+${messageStyles.formatListItem('Fastest and cheapest for small amounts')}
+${messageStyles.formatListItem('Best for regular transactions')}
+${messageStyles.formatListItem(`Format: ${messageStyles.formatCode('ln...')} (starts with ln)`)}`),
+      messageStyles.formatSection('Bitcoin (BTC)', `
+${messageStyles.formatListItem('Most widely supported')}
+${messageStyles.formatListItem('Best for larger amounts')}
+${messageStyles.formatListItem(`Format: ${messageStyles.formatCode('1...')} or ${messageStyles.formatCode('3...')} (25-34 characters)`)}`),
+      messageStyles.formatSection('exSat Network', `
+${messageStyles.formatListItem('Native exSat addresses')}
+${messageStyles.formatListItem('Currently used for all withdrawals')}
+${messageStyles.formatListItem(`Format: ${messageStyles.formatCode('1-12 characters, only a-z, 1-5')}`)}
+${messageStyles.formatListItem(`Example: ${messageStyles.formatCode('myexsatname')}`)}`),
+      messageStyles.formatSection('exSat EVM', `
+${messageStyles.formatListItem('Compatible with Ethereum tools')}
+${messageStyles.formatListItem('Best for DeFi and smart contracts')}
+${messageStyles.formatListItem(`Format: ${messageStyles.formatCode('0x followed by 40 hex characters')}`)}`),
+      messageStyles.formatInfo('Use /linkwallet to add a wallet address for any of these networks.'),
+      messageStyles.formatInfo('Note: Currently, all withdrawals are processed on the exSat Native network.')
+    ].join('\n\n');
+
     await bot.sendMessage(
       msg.chat.id,
-      `*🔗 Supported Networks for Stacking Sats*
-
-*Lightning Network*
-• Fastest and cheapest for small amounts
-• Best for regular transactions
-• Format: ln... (starts with ln)
-
-*Bitcoin (BTC)*
-• Most widely supported
-• Best for larger amounts
-• Format: 1... or 3... (25-34 characters)
-
-*exSat Network*
-• Native exSat addresses
-• Currently used for all withdrawals
-• Format: 1-12 characters, only a-z, 1-5
-• Example: myexsatname
-
-*exSat EVM*
-• Compatible with Ethereum tools
-• Best for DeFi and smart contracts
-• Format: 0x followed by 40 hex characters
-
-Use /linkwallet to add a wallet address for any of these networks.
-Note: Currently, all withdrawals are processed on the exSat Native network.`,
+      chainsInfo,
       { parse_mode: 'Markdown' }
     );
   } catch (error) {
     console.error('Error listing chains:', error);
     await bot.sendMessage(
       msg.chat.id,
-      '❌ An error occurred while fetching network information. Please try again.',
+      messageStyles.formatError('An error occurred while fetching network information. Please try again.'),
+      { reply_to_message_id: msg.message_id }
+    );
+  }
+});
+
+// Add Vaulta API configuration
+const VAULTA_API_URL = 'https://vaulta.greymass.com/v1/chain';
+const BTC_XSAT_CONTRACT = 'btc.xsat';
+
+// Function to fetch wallet balance from Vaulta
+async function getVaultaBalance(address) {
+  try {
+    const response = await fetch(`${VAULTA_API_URL}/get_table_rows`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        json: true,
+        code: BTC_XSAT_CONTRACT,
+        scope: address,
+        table: 'accounts',
+        limit: 1
+      })
+    });
+
+    const data = await response.json();
+    
+    if (!data.rows || data.rows.length === 0) {
+      return {
+        sats: 0,
+        btc: '0.00000000',
+        aTokens: 0,
+        bTokens: 0
+      };
+    }
+
+    const account = data.rows[0];
+    return {
+      sats: account.balance || 0,
+      btc: (account.balance / 100000000).toFixed(8),
+      aTokens: account.a_tokens || 0,
+      bTokens: account.b_tokens || 0
+    };
+  } catch (error) {
+    console.error('Error fetching Vaulta balance:', error);
+    throw error;
+  }
+}
+
+// Handle /wallet command
+bot.onText(/\/wallet/, async (msg) => {
+  try {
+    const user = await getUser(msg.from.id);
+    
+    if (!user) {
+      await bot.sendMessage(
+        msg.chat.id,
+        messageStyles.formatError('You need to participate in the chat first to use wallet features.'),
+        { reply_to_message_id: msg.message_id }
+      );
+      return;
+    }
+
+    const wallet = await getDefaultWalletAddress(msg.from.id, 'exsat');
+    if (!wallet) {
+      await bot.sendMessage(
+        msg.chat.id,
+        messageStyles.formatError('Please link an exSat wallet first using /linkwallet exsat <address>.'),
+        { reply_to_message_id: msg.message_id }
+      );
+      return;
+    }
+
+    // Get wallet balance from Vaulta
+    const balance = await getVaultaBalance(wallet.address);
+    
+    const walletInfo = [
+      `${messageStyles.emojis.wallet} *Your exSat Wallet*`,
+      messageStyles.formatSection('Address', messageStyles.formatCode(wallet.address)),
+      messageStyles.formatSection('Balance', `
+${messageStyles.formatBalance(balance.sats)} (${balance.btc} BTC)
+${messageStyles.formatListItem(`A Tokens: ${balance.aTokens}`)}
+${messageStyles.formatListItem(`B Tokens: ${balance.bTokens}`)}`),
+      messageStyles.formatInfo('Use /linkwallet to add more wallet addresses.')
+    ].join('\n\n');
+
+    await bot.sendMessage(
+      msg.chat.id,
+      walletInfo,
+      { parse_mode: 'Markdown', reply_to_message_id: msg.message_id }
+    );
+  } catch (error) {
+    console.error('Error checking wallet balance:', error);
+    await bot.sendMessage(
+      msg.chat.id,
+      messageStyles.formatError('An error occurred while fetching your wallet balance. Please try again.'),
       { reply_to_message_id: msg.message_id }
     );
   }
