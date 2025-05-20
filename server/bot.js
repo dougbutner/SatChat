@@ -25,6 +25,7 @@ import {
   getDefaultWalletAddress
 } from './database.js';
 import express from 'express';
+import vaultaService from './blockchain/vaulta.js';
 
 // Load environment variables
 dotenv.config();
@@ -39,9 +40,9 @@ const bot = new TelegramBot(token, { polling: true });
 // Default configuration values
 let config = {
   rewardPerMessage: 1,            // Satoshis per message
-  dailyRewardCap: 10000,          // Maximum rewards per day
-  pinningCost: 1000,              // Cost to pin a message
-  pinningDuration: 24,            // Hours a message stays pinned
+  dailyRewardCap: 10,          // Maximum rewards per day
+  pinningCost: 69,              // Cost to pin a message
+  pinningDuration: 48,            // Hours a message stays pinned
 };
 
 // Track daily reward distribution
@@ -353,7 +354,7 @@ bot.onText(/\/claim/, async (msg) => {
     if (wallets.length === 0) {
       await bot.sendMessage(
         msg.chat.id,
-        '❌ You need to link a wallet first using /linkwallet <network> <address>.',
+        '❌ You need to link a wallet first using /linkwallet exsat <address>.',
         { reply_to_message_id: msg.message_id }
       );
       return;
@@ -369,24 +370,67 @@ bot.onText(/\/claim/, async (msg) => {
       return;
     }
 
-    // Create inline keyboard for network selection
-    const keyboard = {
-      inline_keyboard: wallets.map(wallet => [{
-        text: `${wallet.network.toUpperCase()} (${wallet.type})`,
-        callback_data: `claim_${wallet.network}_${wallet.type}`
-      }])
-    };
+    // Get the default exSat wallet
+    const wallet = await getDefaultWalletAddress(msg.from.id, 'exsat');
+    if (!wallet) {
+      await bot.sendMessage(
+        msg.chat.id,
+        '❌ Please set a default exSat wallet using /linkwallet exsat <address>.',
+        { reply_to_message_id: msg.message_id }
+      );
+      return;
+    }
 
-    await bot.sendMessage(
-      msg.chat.id,
-      `💰 Choose a network to claim your ${amountToClaim} sats:`,
-      { reply_to_message_id: msg.message_id, reply_markup: keyboard }
-    );
+    // Generate unique claim ID
+    const claimId = `CLAIM_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+    try {
+      // Send payment through Vaulta
+      const result = await paymentService.sendExSatPayment(
+        wallet.address,
+        amountToClaim,
+        `SatChat Reward Claim for user ${msg.from.id}`
+      );
+
+      if (result.success) {
+        // Reset user balance
+        await resetUserBalance(msg.from.id);
+
+        // Log the claim
+        await logDonation(
+          msg.from.id,
+          amountToClaim,
+          claimId,
+          'Reward Claim',
+          null,
+          null,
+          'exsat'
+        );
+
+        await bot.sendMessage(
+          msg.chat.id,
+          `✅ Successfully claimed ${amountToClaim} sats!\n\n` +
+          `Transaction ID: ${result.txId}\n` +
+          `Amount: ${amountToClaim} sats\n` +
+          `To: ${wallet.address}`,
+          { reply_to_message_id: msg.message_id }
+        );
+      } else {
+        throw new Error('Payment failed');
+      }
+    } catch (error) {
+      console.error('Error processing claim:', error);
+      await bot.sendMessage(
+        msg.chat.id,
+        '❌ An error occurred while processing your claim. Please try again.',
+        { reply_to_message_id: msg.message_id }
+      );
+    }
   } catch (error) {
-    console.error('Error claiming rewards:', error);
+    console.error('Error handling claim:', error);
     await bot.sendMessage(
       msg.chat.id,
-      '❌ An error occurred while processing your claim. Please try again.',
+      '❌ An error occurred. Please try again.',
       { reply_to_message_id: msg.message_id }
     );
   }
@@ -461,6 +505,8 @@ ${process.env.BOT_EXSAT_ADDRESS}
 
 Important: You MUST include the Invoice ID in the memo field:
 ${invoiceId}
+
+The amount will be converted to ${(config.pinningCost * 0.00000001).toFixed(8)} A tokens on the Vaulta network.
 
 Once you've sent the payment, click the "Verify Payment" button below.`;
 
@@ -601,9 +647,34 @@ bot.on('callback_query', async (query) => {
 // Helper function to verify exSat payment
 async function verifyExSatPayment(invoiceId, expectedAmount) {
   try {
-    // TODO: Implement blockchain history check using eosJS
-    // This is a placeholder - you'll need to implement the actual blockchain check
-    return false;
+    // Get payment details from database
+    const [rows] = await pool.query(
+      'SELECT * FROM donations WHERE invoiceId = ?',
+      [invoiceId]
+    );
+
+    if (rows.length === 0) {
+      return false;
+    }
+
+    const payment = rows[0];
+    
+    // Verify payment on Vaulta blockchain
+    const verification = await vaultaService.verifyPayment(
+      invoiceId,
+      expectedAmount,
+      payment.fromAddress
+    );
+
+    if (verification.paid) {
+      // Update payment record with transaction ID
+      await pool.query(
+        'UPDATE donations SET txId = ?, status = ? WHERE invoiceId = ?',
+        [verification.txId, 'completed', invoiceId]
+      );
+    }
+
+    return verification.paid;
   } catch (error) {
     console.error('Error verifying exSat payment:', error);
     return false;
@@ -626,7 +697,7 @@ bot.onText(/\/balance/, async (msg) => {
     
     await bot.sendMessage(
       msg.chat.id,
-      `💰 Your current balance is ${user.balance} sats. Use /claim to transfer to your Lightning wallet.`,
+      `💰 Your current balance is ${user.balance} sats. Use /claim to withdraw to your exSat wallet.`,
       { reply_to_message_id: msg.message_id }
     );
   } catch (error) {
@@ -795,26 +866,31 @@ bot.onText(/\/help/, async (msg) => {
 /linkwallet <network> <address> - Link a wallet address
 Supported networks:
 • lightning - Lightning Network address (starts with ln)
-• btc - Bitcoin address
-• exsat - exSat native address
-• exsat-evm - exSat EVM address
+• btc - Bitcoin address (supports all formats: Legacy, SegWit, Native SegWit, Taproot)
+• exsat - exSat native address (Vaulta network account)
+• exsat-evm - exSat EVM address (Vaulta EVM network account)
 
 *Currently Active Network:*
-• exSat Native Network
-  - All payments and rewards are processed on exSat
+• exSat Native (Vaulta)
+  - All withdrawals are processed on exSat Native
   - Format: 1-12 characters, only a-z, 1-5
   Example: myexsatname
 
+*Wallet Management:*
 /wallets - List your linked wallets
-/claim - Claim your earned satoshis to your wallet
+/linkwallet - Link a new wallet address
+/listchains - View supported networks and their formats
+
+*Rewards & Payments:*
+/claim - Claim your earned satoshis to your exSat wallet
 /pin - Reply to a message with this command to pin it (costs ${config.pinningCost} sats)
 /balance - Check your current balance
 
 *Admin Commands:*
-/setreward <amount> - Set reward per message
-/setcap <amount> - Set daily reward cap
+/setreward <amount> - Set reward per message (1-100 sats)
+/setcap <amount> - Set daily reward cap (min 1000 sats)
 /setpin <cost> <hours> - Set pinning cost and duration
-/addkeyword <word> <multiplier> - Add or update a keyword that boosts rewards (multiplier between 1.0-10.0)
+/addkeyword <word> <multiplier> - Add or update a reward-boosting keyword (1.0-10.0x)
 
 *Current Settings:*
 • Reward per message: ${config.rewardPerMessage} sats
@@ -823,7 +899,7 @@ Supported networks:
 • Pinning duration: ${config.pinningDuration} hours
 
 *Payment Instructions:*
-• All payments are processed on the exSat network
+• All withdrawals are processed on the exSat Native network
 • When pinning a message, you'll receive an invoice ID
 • Send the exact amount to the bot's exSat address
 • Include the invoice ID in the memo field
@@ -836,6 +912,12 @@ Made with ❤️ for the Bitcoin 2025 Hackathon
   } catch (error) {
     console.error('Error sending help message:', error);
   }
+});
+
+// Add /info as alias for /help
+bot.onText(/\/info/, async (msg) => {
+  // Reuse the help command handler
+  await bot.emit('message', msg);
 });
 
 // Check unpinning scheduled messages
@@ -966,15 +1048,17 @@ bot.onText(/\/listchains/, async (msg) => {
 
 *exSat Network*
 • Native exSat addresses
-• Best for exSat ecosystem
-• Format: 42 characters
+• Currently used for all withdrawals
+• Format: 1-12 characters, only a-z, 1-5
+• Example: myexsatname
 
 *exSat EVM*
 • Compatible with Ethereum tools
 • Best for DeFi and smart contracts
 • Format: 0x followed by 40 hex characters
 
-Use /linkwallet to add a wallet address for any of these networks.`,
+Use /linkwallet to add a wallet address for any of these networks.
+Note: Currently, all withdrawals are processed on the exSat Native network.`,
       { parse_mode: 'Markdown' }
     );
   } catch (error) {

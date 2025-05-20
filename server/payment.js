@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
 import axios from 'axios';
+import vaultaService from './blockchain/vaulta.js';
 
 class PaymentService {
   constructor() {
@@ -96,8 +97,7 @@ class PaymentService {
       // Generate a unique payment ID
       const paymentId = `exsat-${createHash('sha256').update(Date.now().toString()).digest('hex')}`;
       
-      // For exSat, we'll use a static address for now
-      // In production, you should use the exSat API
+      // Get bot's Vaulta address
       const address = type === 'evm' 
         ? process.env.EXSAT_EVM_ADDRESS 
         : process.env.EXSAT_NATIVE_ADDRESS;
@@ -189,7 +189,7 @@ class PaymentService {
 
   async verifyExSatPayment(invoiceId, type) {
     try {
-      // For now, we'll just check if the payment exists in our database
+      // Get payment details from database
       const [rows] = await pool.query(
         'SELECT * FROM donations WHERE invoiceId = ?',
         [invoiceId]
@@ -201,15 +201,33 @@ class PaymentService {
 
       const payment = rows[0];
       
-      // In production, you should verify the payment on the exSat network
-      return {
-        status: 'pending',
-        paid: false,
-        amount: payment.amount,
-        expectedAmount: payment.amount
-      };
+      // Verify payment on Vaulta blockchain
+      const verification = await vaultaService.verifyPayment(
+        invoiceId,
+        payment.amount,
+        payment.fromAddress
+      );
+
+      if (verification.paid) {
+        // Update payment record with transaction ID
+        await pool.query(
+          'UPDATE donations SET txId = ?, status = ? WHERE invoiceId = ?',
+          [verification.txId, 'completed', invoiceId]
+        );
+      }
+
+      return verification;
     } catch (error) {
       console.error('Error verifying exSat payment:', error);
+      throw error;
+    }
+  }
+
+  async sendExSatPayment(toAddress, amount, memo) {
+    try {
+      return await vaultaService.sendPayment(toAddress, amount, memo);
+    } catch (error) {
+      console.error('Error sending exSat payment:', error);
       throw error;
     }
   }
