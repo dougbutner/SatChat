@@ -159,8 +159,42 @@ bot.on('message', async (msg) => {
 });
 
 // Handle /linkwallet command
-bot.onText(/\/linkwallet (.+)/, async (msg, match) => {
+bot.onText(/\/linkwallet(?:\s+(.+))?/, async (msg, match) => {
   try {
+    // If no arguments provided, show format help
+    if (!match[1]) {
+      await bot.sendMessage(
+        msg.chat.id,
+        `*📝 Wallet Linking Guide*
+
+Please use the following format:
+/linkwallet <network> <address>
+
+*Supported Networks and Formats:*
+• lightning - Lightning Network address
+  Format: ln... (starts with ln)
+  Example: lnbc1p...
+
+• btc - Bitcoin address
+  Supported formats:
+  - Legacy (P2PKH): Starts with 1
+  - SegWit (P2SH): Starts with 3
+  - Native SegWit (Bech32): Starts with bc1
+  - Taproot (Bech32m): Starts with bc1p
+  Example: 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa
+
+• exsat - exSat native address (EOSIO format)
+  Format: 1-12 characters, only a-z, 1-5
+  Example: ice
+
+• exsat-evm - exSat EVM address
+  Format: 0x followed by 40 hex characters
+  Example: 0x742d35Cc6634C0532925a3b844Bc454e4438f44e`,
+        { parse_mode: 'Markdown' }
+      );
+      return;
+    }
+
     const args = match[1].trim().split(' ');
     if (args.length < 2) {
       await bot.sendMessage(
@@ -189,11 +223,15 @@ bot.onText(/\/linkwallet (.+)/, async (msg, match) => {
         type = 'lightning';
         break;
       case 'btc':
-        isValid = /^[13][a-km-zA-HJ-NP-Z1-9]{25,34}$/.test(address);
+        // Support for all common Bitcoin address formats:
+        // P2PKH (1...), P2SH (3...), Bech32 (bc1...), and Bech32m (bc1p...)
+        isValid = /^(bc1|[13])[a-zA-HJ-NP-Z0-9]{25,39}$/.test(address) || 
+                 /^bc1[ac-hj-np-z02-9]{11,71}$/.test(address);
         type = 'bitcoin';
         break;
       case 'exsat':
-        isValid = /^[a-zA-Z0-9]{42}$/.test(address);
+        // EOSIO format: 1-12 characters, only a-z, 1-5
+        isValid = /^[a-z1-5]{1,12}$/.test(address);
         type = 'native';
         break;
       case 'exsat-evm':
@@ -210,9 +248,29 @@ bot.onText(/\/linkwallet (.+)/, async (msg, match) => {
     }
 
     if (!isValid) {
+      let formatHint = '';
+      switch (network.toLowerCase()) {
+        case 'exsat':
+          formatHint = 'exSat addresses use EOSIO format (1-12 characters, only a-z, 1-5)\nExample: ice';
+          break;
+        case 'lightning':
+          formatHint = 'Lightning addresses start with ln';
+          break;
+        case 'btc':
+          formatHint = `Bitcoin addresses can be in these formats:
+• Legacy (P2PKH): Starts with 1
+• SegWit (P2SH): Starts with 3
+• Native SegWit (Bech32): Starts with bc1
+• Taproot (Bech32m): Starts with bc1p`;
+          break;
+        case 'exsat-evm':
+          formatHint = 'exSat EVM addresses start with 0x followed by 40 hex characters';
+          break;
+      }
+      
       await bot.sendMessage(
         msg.chat.id,
-        `❌ Invalid ${network} address format. Please check and try again.`,
+        `❌ Invalid ${network} address format. ${formatHint}`,
         { reply_to_message_id: msg.message_id }
       );
       return;
@@ -701,9 +759,9 @@ bot.onText(/\/addkeyword (\w+) (\d+\.?\d*)/, async (msg, match) => {
 bot.onText(/\/help/, async (msg) => {
   try {
     const helpText = `
-<b>📚 SatChat Bot Help</b>
+*📚 SatChat Bot Help*
 
-<b>User Commands:</b>
+*User Commands:*
 /linkwallet <network> <address> - Link a wallet address
 Supported networks:
 • lightning - Lightning Network address (starts with ln)
@@ -716,13 +774,13 @@ Supported networks:
 /pin - Reply to a message with this command to pin it (costs ${config.pinningCost} sats)
 /balance - Check your current balance
 
-<b>Admin Commands:</b>
+*Admin Commands:*
 /setreward <amount> - Set reward per message
 /setcap <amount> - Set daily reward cap
 /setpin <cost> <hours> - Set pinning cost and duration
 /addkeyword <word> <multiplier> - Add or update a keyword that boosts rewards (multiplier between 1.0-10.0)
 
-<b>Current Settings:</b>
+*Current Settings:*
 • Reward per message: ${config.rewardPerMessage} sats
 • Daily reward cap: ${config.dailyRewardCap} sats
 • Pinning cost: ${config.pinningCost} sats
@@ -731,7 +789,7 @@ Supported networks:
 Made with ❤️ for the Bitcoin 2025 Hackathon
 `;
     
-    await bot.sendMessage(msg.chat.id, helpText, { parse_mode: 'HTML' });
+    await bot.sendMessage(msg.chat.id, helpText, { parse_mode: 'Markdown' });
   } catch (error) {
     console.error('Error sending help message:', error);
   }
@@ -845,3 +903,43 @@ loadConfig();
 
 // Start message
 console.log('SatChat Bot is running...');
+
+// Handle /listchains command
+bot.onText(/\/listchains/, async (msg) => {
+  try {
+    await bot.sendMessage(
+      msg.chat.id,
+      `*🔗 Supported Networks for Stacking Sats*
+
+*Lightning Network*
+• Fastest and cheapest for small amounts
+• Best for regular transactions
+• Format: ln... (starts with ln)
+
+*Bitcoin (BTC)*
+• Most widely supported
+• Best for larger amounts
+• Format: 1... or 3... (25-34 characters)
+
+*exSat Network*
+• Native exSat addresses
+• Best for exSat ecosystem
+• Format: 42 characters
+
+*exSat EVM*
+• Compatible with Ethereum tools
+• Best for DeFi and smart contracts
+• Format: 0x followed by 40 hex characters
+
+Use /linkwallet to add a wallet address for any of these networks.`,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (error) {
+    console.error('Error listing chains:', error);
+    await bot.sendMessage(
+      msg.chat.id,
+      '❌ An error occurred while fetching network information. Please try again.',
+      { reply_to_message_id: msg.message_id }
+    );
+  }
+});
