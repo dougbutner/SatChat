@@ -414,23 +414,63 @@ bot.onText(/\/pin/, async (msg) => {
       );
       return;
     }
-    
-    // Create inline keyboard for payment network selection
+
+    // Generate unique invoice ID
+    const invoiceId = `PIN_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+    // Create inline keyboard with verify payment button
     const keyboard = {
       inline_keyboard: [
         [
-          { text: '₿ Bitcoin Mainnet', callback_data: 'pin_btc' }
-        ],
-        [
-          { text: '🟡 exSat Network', callback_data: 'pin_exsat' }
+          { text: '✅ Verify Payment', callback_data: `verify_${invoiceId}` }
         ]
       ]
     };
 
+    // Record the pinning request
+    const expiryTime = new Date();
+    expiryTime.setHours(expiryTime.getHours() + config.pinningDuration);
+    await addPinnedMessage(
+      msg.reply_to_message.message_id,
+      msg.chat.id,
+      msg.from.id,
+      config.pinningCost,
+      expiryTime,
+      invoiceId,
+      'exsat'
+    );
+
+    // Log the donation
+    await logDonation(
+      msg.from.id,
+      config.pinningCost,
+      invoiceId,
+      'Message Pinning',
+      msg.reply_to_message.message_id,
+      msg.chat.id,
+      'exsat'
+    );
+
+    // Send payment instructions
+    const paymentInstructions = `📌 To pin this message for ${config.pinningDuration} hours, you need to pay ${config.pinningCost} sats using exSat.
+
+Invoice ID: ${invoiceId}
+
+Please send exactly ${config.pinningCost} sats to this exSat address:
+${process.env.BOT_EXSAT_ADDRESS}
+
+Important: You MUST include the Invoice ID in the memo field:
+${invoiceId}
+
+Once you've sent the payment, click the "Verify Payment" button below.`;
+
     await bot.sendMessage(
       msg.chat.id,
-      `📌 Choose your preferred payment network to pin this message for ${config.pinningDuration} hours (${config.pinningCost} sats):`,
-      { reply_to_message_id: msg.message_id, reply_markup: keyboard }
+      paymentInstructions,
+      { 
+        reply_to_message_id: msg.message_id,
+        reply_markup: keyboard
+      }
     );
   } catch (error) {
     console.error('Error handling pin request:', error);
@@ -442,18 +482,76 @@ bot.onText(/\/pin/, async (msg) => {
   }
 });
 
-// Handle payment network selection
+// Handle payment verification
 bot.on('callback_query', async (query) => {
   try {
-    const [action, network, type] = query.data.split('_');
+    const [action, invoiceId] = query.data.split('_');
     
-    if (action === 'claim') {
+    if (action === 'verify') {
+      const msg = query.message;
+      
+      // Get the pinned message details
+      const [pinRows] = await pool.query('SELECT * FROM pinnedMessages WHERE invoiceId = ?', [invoiceId]);
+      if (pinRows.length === 0) {
+        await bot.answerCallbackQuery(query.id, {
+          text: '❌ Invoice not found.',
+          show_alert: true
+        });
+        return;
+      }
+
+      const pin = pinRows[0];
+      
+      // Check if already paid
+      if (pin.paymentStatus === 'completed') {
+        await bot.answerCallbackQuery(query.id, {
+          text: '✅ Payment already verified!',
+          show_alert: true
+        });
+        return;
+      }
+
+      // Verify payment on blockchain
+      const paymentVerified = await verifyExSatPayment(invoiceId, pin.cost);
+      
+      if (paymentVerified) {
+        // Update payment status
+        await updatePinPaymentStatus(invoiceId, 'completed');
+        await updateDonationStatus(invoiceId, 'completed');
+        
+        // Update bot balance
+        const currentBalance = await getBotBalance('exsat');
+        await updateBotBalance('exsat', currentBalance + pin.cost);
+        
+        // Pin the message
+        await bot.pinChatMessage(pin.chatId, pin.messageId);
+        
+        await bot.answerCallbackQuery(query.id, {
+          text: '✅ Payment verified! Message has been pinned.',
+          show_alert: true
+        });
+        
+        await bot.editMessageText(
+          '✅ Payment verified! Message has been pinned successfully.',
+          {
+            chat_id: msg.chat.id,
+            message_id: msg.message_id,
+            reply_markup: { inline_keyboard: [] }
+          }
+        );
+      } else {
+        await bot.answerCallbackQuery(query.id, {
+          text: '❌ Payment not found. Please make sure you sent the correct amount with the Invoice ID in the memo.',
+          show_alert: true
+        });
+      }
+    } else if (action === 'claim') {
       const msg = query.message;
       const user = await getUser(query.from.id);
       const amountToClaim = user.balance;
       
       // Get the wallet address for the selected network
-      const wallet = await getDefaultWalletAddress(query.from.id, network);
+      const wallet = await getDefaultWalletAddress(query.from.id, 'exsat');
       if (!wallet) {
         await bot.answerCallbackQuery(query.id, {
           text: '❌ Wallet not found. Please link a wallet first.',
@@ -466,101 +564,21 @@ bot.on('callback_query', async (query) => {
       const payment = await paymentService.createPayment({
         amount: amountToClaim,
         description: `SatChat Reward Claim for user ${query.from.id}`,
-        network,
-        type,
+        network: 'exsat',
+        type: 'exsat',
         callbackUrl: process.env.WEBHOOK_URL,
         autoSettle: true
       });
 
       // Log the claim attempt
-      await logDonation(query.from.id, amountToClaim, payment.invoiceId, 'Reward Claim', null, null, network);
+      await logDonation(query.from.id, amountToClaim, payment.invoiceId, 'Reward Claim', null, null, 'exsat');
       
       // Reset user balance
       await resetUserBalance(query.from.id);
 
       // Send payment instructions
       let paymentInstructions = '';
-      switch (network) {
-        case 'lightning':
-          paymentInstructions = `⚡️ To claim your ${amountToClaim} sats, please pay this Lightning invoice:\n\n${payment.paymentRequest}`;
-          break;
-        case 'btc':
-          paymentInstructions = `₿ To claim your ${amountToClaim} sats, please send to this Bitcoin address:\n\n${payment.paymentRequest}`;
-          break;
-        case 'exsat':
-          paymentInstructions = `🟡 To claim your ${amountToClaim} sats, please send to this exSat address:\n\n${payment.paymentRequest}`;
-          break;
-        case 'exsat-evm':
-          paymentInstructions = `🟡 To claim your ${amountToClaim} sats, please send to this exSat EVM address:\n\n${payment.paymentRequest}`;
-          break;
-      }
-
-      await bot.editMessageText(
-        paymentInstructions,
-        {
-          chat_id: msg.chat.id,
-          message_id: msg.message_id,
-          reply_markup: { inline_keyboard: [] }
-        }
-      );
-    } else if (action === 'pin') {
-      const msg = query.message;
-      const cost = config.pinningCost;
-      
-      // Create payment based on selected network
-      const payment = await paymentService.createPayment({
-        amount: cost,
-        description: `SatChat Message Pinning for message ${msg.reply_to_message.message_id}`,
-        network,
-        callbackUrl: process.env.WEBHOOK_URL,
-        autoSettle: false
-      });
-
-      // Record the pinning request
-      const expiryTime = new Date();
-      expiryTime.setHours(expiryTime.getHours() + config.pinningDuration);
-      await addPinnedMessage(
-        msg.reply_to_message.message_id,
-        msg.chat.id,
-        query.from.id,
-        cost,
-        expiryTime,
-        payment.invoiceId,
-        network
-      );
-
-      // Log the donation
-      await logDonation(
-        query.from.id,
-        cost,
-        payment.invoiceId,
-        'Message Pinning',
-        msg.reply_to_message.message_id,
-        msg.chat.id,
-        network
-      );
-
-      // Send payment instructions
-      let paymentInstructions = '';
-      if (network === 'btc') {
-        paymentInstructions = `📌 To pin this message for ${config.pinningDuration} hours, you need to pay ${cost} sats using Bitcoin.
-
-Invoice ID: ${payment.invoiceId}
-
-Please send exactly ${cost} sats to this Bitcoin address:
-${payment.paymentRequest}
-
-Once payment is confirmed, the message will be pinned.`;
-      } else if (network === 'exsat') {
-        paymentInstructions = `📌 To pin this message for ${config.pinningDuration} hours, you need to pay ${cost} sats using exSat.
-
-Invoice ID: ${payment.invoiceId}
-
-Please send exactly ${cost} sats using the following payment request:
-${payment.paymentRequest}
-
-Once payment is confirmed, the message will be pinned.`;
-      }
+      paymentInstructions = `🟡 To claim your ${amountToClaim} sats, please send to this exSat address:\n\n${payment.paymentRequest}`;
 
       await bot.editMessageText(
         paymentInstructions,
@@ -579,6 +597,18 @@ Once payment is confirmed, the message will be pinned.`;
     });
   }
 });
+
+// Helper function to verify exSat payment
+async function verifyExSatPayment(invoiceId, expectedAmount) {
+  try {
+    // TODO: Implement blockchain history check using eosJS
+    // This is a placeholder - you'll need to implement the actual blockchain check
+    return false;
+  } catch (error) {
+    console.error('Error verifying exSat payment:', error);
+    return false;
+  }
+}
 
 // Handle /balance command
 bot.onText(/\/balance/, async (msg) => {
@@ -769,6 +799,12 @@ Supported networks:
 • exsat - exSat native address
 • exsat-evm - exSat EVM address
 
+*Currently Active Network:*
+• exSat Native Network
+  - All payments and rewards are processed on exSat
+  - Format: 1-12 characters, only a-z, 1-5
+  Example: myexsatname
+
 /wallets - List your linked wallets
 /claim - Claim your earned satoshis to your wallet
 /pin - Reply to a message with this command to pin it (costs ${config.pinningCost} sats)
@@ -785,6 +821,13 @@ Supported networks:
 • Daily reward cap: ${config.dailyRewardCap} sats
 • Pinning cost: ${config.pinningCost} sats
 • Pinning duration: ${config.pinningDuration} hours
+
+*Payment Instructions:*
+• All payments are processed on the exSat network
+• When pinning a message, you'll receive an invoice ID
+• Send the exact amount to the bot's exSat address
+• Include the invoice ID in the memo field
+• Click "Verify Payment" after sending
 
 Made with ❤️ for the Bitcoin 2025 Hackathon
 `;

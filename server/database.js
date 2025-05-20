@@ -136,6 +136,18 @@ async function initializeDatabase() {
       )
     `);
     
+    // Create bot_balances table
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS bot_balances (
+        id INT PRIMARY KEY AUTO_INCREMENT,
+        network VARCHAR(50) NOT NULL,
+        address VARCHAR(255) NOT NULL,
+        balance BIGINT NOT NULL DEFAULT 0,
+        last_sync TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY unique_network (network)
+      )
+    `);
+    
     console.log('Database and tables initialized successfully');
     connection.release();
   } catch (error) {
@@ -315,6 +327,92 @@ async function getDefaultWalletAddress(telegramId, network) {
     console.error('Error getting default wallet address:', error);
     throw error;
   }
+}
+
+// Function to get bot balance for a network
+export async function getBotBalance(network) {
+  try {
+    const [rows] = await pool.query(
+      'SELECT balance FROM bot_balances WHERE network = ?',
+      [network]
+    );
+    return rows.length > 0 ? rows[0].balance : 0;
+  } catch (error) {
+    console.error('Error getting bot balance:', error);
+    return 0;
+  }
+}
+
+// Function to update bot balance
+export async function updateBotBalance(network, balance) {
+  try {
+    await pool.query(
+      'INSERT INTO bot_balances (network, balance) VALUES (?, ?) ' +
+      'ON DUPLICATE KEY UPDATE balance = ?, last_sync = CURRENT_TIMESTAMP',
+      [network, balance, balance]
+    );
+  } catch (error) {
+    console.error('Error updating bot balance:', error);
+  }
+}
+
+// Function to sync all bot balances
+export async function syncBotBalances() {
+  try {
+    // Get all bot wallet addresses
+    const [wallets] = await pool.query('SELECT network, address FROM bot_balances');
+    
+    for (const wallet of wallets) {
+      let balance = 0;
+      
+      // Fetch balance from appropriate blockchain API
+      switch (wallet.network) {
+        case 'btc':
+          // Use Bitcoin blockchain API
+          balance = await fetchBitcoinBalance(wallet.address);
+          break;
+        case 'lightning':
+          // Use Lightning Network API
+          balance = await fetchLightningBalance(wallet.address);
+          break;
+        case 'exsat':
+          // Use exSat API
+          balance = await fetchExSatBalance(wallet.address);
+          break;
+        case 'exsat-evm':
+          // Use exSat EVM API
+          balance = await fetchExSatEVMBalance(wallet.address);
+          break;
+      }
+      
+      // Update balance in database
+      await updateBotBalance(wallet.network, balance);
+    }
+  } catch (error) {
+    console.error('Error syncing bot balances:', error);
+  }
+}
+
+// Helper functions to fetch balances from different networks
+async function fetchBitcoinBalance(address) {
+  // Implement Bitcoin balance check using a public API
+  // Example: blockchain.info or blockchair.com
+  return 0; // Placeholder
+}
+
+async function fetchLightningBalance(address) {
+  // Implement Lightning balance check
+  return 0; // Placeholder
+}
+
+async function fetchExSatBalance(address) {
+  // Implement exSat balance check
+  return 0; // Placeholder
+}
+
+async function fetchExSatEVMBalance(address) {
+  // Implement exSat EVM balance check
+  return 0; // Placeholder
 }
 
 export {
