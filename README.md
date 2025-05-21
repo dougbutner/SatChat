@@ -1,15 +1,15 @@
-# SatChat
+# ⚡ SatChat
 
-SatChat is a modern web application that integrates cryptocurrency functionality with a Telegram bot interface. Built with React, TypeScript, and Node.js, it provides a seamless experience for managing cryptocurrency transactions and interactions.
+SatChat is a modern web application that integrates cryptocurrency functionality with a Telegram bot interface. Built with React, TypeScript, and Node.js, it provides a seamless experience for managing cryptocurrency transactions and interactions through chat.
 
 ## Features
 
-- 🚀 Modern React-based dashboard
-- 💰 Cryptocurrency wallet integration
-- 🤖 Telegram bot functionality
-- 📊 Analytics and reporting
-- 🔐 Secure wallet connection
-- 👨‍💼 Admin panel for management
+- 🚀 Modern React-based dashboard with real-time updates
+- 💰 Cryptocurrency wallet integration via Lightning Network
+- 🤖 Telegram bot functionality for user engagement
+- 📊 Analytics and reporting to track user activity
+- 🔐 Secure wallet connection for transactions
+- 👨‍💼 Admin panel for easy system management
 
 ## Bot Commands
 
@@ -26,11 +26,11 @@ SatChat is a modern web application that integrates cryptocurrency functionality
 - `/setpin <cost> <hours>` - Set the cost and duration for pinning messages
 - `/addkeyword <word> <multiplier>` - Add a keyword that boosts rewards with a multiplier
 
-### Features
+### Core Features
 - Earn satoshis for sending messages in the chat
-- Keywords can multiply your rewards
+- Keywords can multiply your rewards based on content
 - Pin important messages for a fee
-- Daily reward caps to manage distribution
+- Daily reward caps to manage token distribution
 - Automatic Bitcoin facts shared in chat
 - Secure Lightning Network payments via OpenNode
 
@@ -42,8 +42,8 @@ SatChat is a modern web application that integrates cryptocurrency functionality
 - React Router DOM
 - TailwindCSS
 - Vite
-- Recharts for analytics
-- Lucide React for icons
+- Recharts for analytics visualization
+- Lucide React for modern icons
 
 ### Backend
 - Node.js
@@ -52,6 +52,7 @@ SatChat is a modern web application that integrates cryptocurrency functionality
 - MySQL Database
 - OpenNode API integration
 - Telegram Bot API
+- Blockchain interaction services
 
 ## Prerequisites
 
@@ -65,8 +66,8 @@ SatChat is a modern web application that integrates cryptocurrency functionality
 
 1. Clone the repository:
    ```bash
-git clone https://github.com/yourusername/satchat.git
-cd satchat
+   git clone https://github.com/yourusername/satchat.git
+   cd satchat
    ```
 
 2. Install frontend dependencies:
@@ -75,43 +76,43 @@ cd satchat
    ```
 
 3. Install Python dependencies:
-```bash
-pip install -r requirements.txt
-```
+   ```bash
+   pip install -r requirements.txt
+   ```
 
 4. Create a `.env` file in the root directory with the following variables:
-```env
-     TELEGRAM_BOT_TOKEN=your_telegram_bot_token
-     OPENNODE_API_KEY=your_opennode_api_key
-DB_HOST=localhost
-DB_USER=your_db_user
-DB_PASSWORD=your_db_password
-DB_NAME=satchat
-```
+   ```env
+   TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+   OPENNODE_API_KEY=your_opennode_api_key
+   DB_HOST=localhost
+   DB_USER=your_db_user
+   DB_PASSWORD=your_db_password
+   DB_NAME=satchat
+   ```
 
 ## Development
 
 1. Start the frontend development server:
-```bash
-npm run dev
-```
+   ```bash
+   npm run dev
+   ```
 
 2. Start the Telegram bot:
-```bash
-npm run start:bot
-```
+   ```bash
+   npm run start:bot
+   ```
 
 ## Building for Production
 
 1. Build the frontend:
-```bash
-npm run build
-```
+   ```bash
+   npm run build
+   ```
 
 2. Preview the production build:
-```bash
-npm run preview
-```
+   ```bash
+   npm run preview
+   ```
 
 ## Project Structure
 
@@ -124,6 +125,8 @@ satchat/
 ├── server/                # Backend server code
 │   ├── bot.js            # Telegram bot implementation
 │   ├── database.js       # Database operations
+│   ├── payment.js        # Payment processing
+│   ├── blockchain/       # Blockchain interactions
 │   └── utils/            # Utility functions
 ├── public/               # Static assets
 └── dist/                # Production build output
