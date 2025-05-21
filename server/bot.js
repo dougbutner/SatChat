@@ -12,6 +12,7 @@ import {
   logReward,
   saveDailyStats,
   addPinnedMessage,
+  getPinnedMessage,
   getExpiredPins,
   removePin,
   logDonation,
@@ -398,10 +399,10 @@ bot.onText(/\/claim/, async (msg) => {
       return;
     }
 
-    if (user.balance < 1000) {
+    if (user.balance <= 0) {
       await bot.sendMessage(
         msg.chat.id,
-        messageStyles.formatWarning(`Minimum withdrawal amount is 1000 sats. Your current balance is ${user.balance} sats.`),
+        messageStyles.formatWarning(`You need to have a positive balance to withdraw. Your current balance is ${user.balance} sats.`),
         { reply_to_message_id: msg.message_id }
       );
       return;
@@ -571,9 +572,23 @@ bot.on('callback_query', async (query) => {
         return;
       }
 
-      const paymentVerified = await verifyPayment(invoiceId);
+      // Get the user's default wallet address
+      const userWallet = await getDefaultWalletAddress(query.from.id, 'exsat');
+      if (!userWallet) {
+        await bot.answerCallbackQuery(query.id, {
+          text: messageStyles.formatError('Please set up your exSat wallet first using /wallet command.'),
+          show_alert: true
+        });
+        return;
+      }
+
+      const paymentVerified = await vaultaService.verifyPayment(
+        invoiceId,
+        pin.cost,
+        userWallet.address
+      );
       
-      if (paymentVerified) {
+      if (paymentVerified.paid) {
         await updatePinPaymentStatus(invoiceId, 'completed');
         await updateDonationStatus(invoiceId, 'completed');
         
@@ -610,43 +625,6 @@ bot.on('callback_query', async (query) => {
     });
   }
 });
-
-// Helper function to verify exSat payment
-async function verifyExSatPayment(invoiceId, expectedAmount) {
-  try {
-    // Get payment details from database
-    const [rows] = await pool.query(
-      'SELECT * FROM donations WHERE invoiceId = ?',
-      [invoiceId]
-    );
-
-    if (rows.length === 0) {
-      return false;
-    }
-
-    const payment = rows[0];
-    
-    // Verify payment on Vaulta blockchain
-    const verification = await vaultaService.verifyPayment(
-      invoiceId,
-      expectedAmount,
-      payment.fromAddress
-    );
-
-    if (verification.paid) {
-      // Update payment record with transaction ID
-      await pool.query(
-        'UPDATE donations SET txId = ?, status = ? WHERE invoiceId = ?',
-        [verification.txId, 'completed', invoiceId]
-      );
-    }
-
-    return verification.paid;
-  } catch (error) {
-    console.error('Error verifying exSat payment:', error);
-    return false;
-  }
-}
 
 // Handle /balance command
 bot.onText(/\/balance/, async (msg) => {
@@ -724,10 +702,10 @@ bot.onText(/\/setcap (\d+)/, async (msg, match) => {
     }
     
     const newCap = parseInt(match[1]);
-    if (isNaN(newCap) || newCap < 1000) {
+    if (isNaN(newCap) || newCap < 1) {
       await bot.sendMessage(
         msg.chat.id,
-        '❌ Daily reward cap must be at least 1000 sats.',
+        '❌ Daily reward cap must be a positive number.',
         { reply_to_message_id: msg.message_id }
       );
       return;
@@ -886,6 +864,7 @@ async function checkExpiredPins() {
       try {
         await bot.unpinChatMessage(pinnedMsg.chatId, pinnedMsg.messageId);
         await removePin(pinnedMsg.messageId, pinnedMsg.chatId);
+        console.log(`Unpinned message ${pinnedMsg.messageId} in chat ${pinnedMsg.chatId}`);
       } catch (error) {
         console.error(`Error unpinning message ${pinnedMsg.messageId}:`, error);
       }
@@ -895,8 +874,8 @@ async function checkExpiredPins() {
   }
 }
 
-// Check for expired pins every hour
-setInterval(checkExpiredPins, 60 * 60 * 1000);
+// Schedule expired pins check every 5 minutes
+setInterval(checkExpiredPins, 5 * 60 * 1000);
 
 // Webhook endpoint for payment confirmation
 const app = express();

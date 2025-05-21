@@ -211,6 +211,11 @@ async function addPinnedMessage(messageId, chatId, userId, cost, expiresAt, invo
   );
 }
 
+async function getPinnedMessage(invoiceId) {
+  const [rows] = await pool.query('SELECT * FROM pinnedMessages WHERE invoiceId = ?', [invoiceId]);
+  return rows.length > 0 ? rows[0] : null;
+}
+
 async function updatePinPaymentStatus(invoiceId, status) {
   await pool.query(
     'UPDATE pinnedMessages SET paymentStatus = ? WHERE invoiceId = ?',
@@ -425,6 +430,7 @@ export {
   logReward,
   saveDailyStats,
   addPinnedMessage,
+  getPinnedMessage,
   updatePinPaymentStatus,
   getExpiredPins,
   removePin,
